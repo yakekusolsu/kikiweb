@@ -12,11 +12,7 @@ services:
         value: 22
       - key: CLIENT_ORIGIN
         sync: false
-      - key: DISCORD_TOKEN
-        sync: false
-      - key: DISCORD_GUILD_ID
-        sync: false
-      - key: DISCORD_VOICE_CHANNEL_ID
+      - key: INGEST_TOKEN
         sync: false
       - key: LISTEN_TOKEN
         sync: false

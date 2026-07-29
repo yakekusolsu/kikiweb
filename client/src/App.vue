@@ -13,6 +13,10 @@ type ApiStatus = {
     connectedVoiceChannelId: string | null;
     botUser: { username: string } | null;
   };
+  relay?: {
+    ingestConnected: boolean;
+    lastIngestAt: number;
+  };
 };
 
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
@@ -38,6 +42,7 @@ const currentPage = computed(() => {
 const stateLabel = computed(() => {
   const state = status.value?.discord.state;
   if (state === 'ready') return 'VC 接続中';
+  if (state === 'waiting-for-bot') return 'Bot 接続待ち';
   if (state === 'starting') return '起動中';
   if (state === 'missing-config') return '環境変数待ち';
   if (state === 'error') return 'エラー';
@@ -145,19 +150,6 @@ const stopListening = () => {
   }
 };
 
-const reconnectBot = async () => {
-  playerError.value = '';
-  try {
-    await fetch(`${normalizedApiUrl.value}/reconnect`, {
-      method: 'POST',
-      headers: listenToken.value ? { 'x-listen-token': listenToken.value } : {},
-    });
-    await fetchStatus();
-  } catch (error) {
-    playerError.value = error instanceof Error ? error.message : String(error);
-  }
-};
-
 const syncRoute = () => {
   route.value = window.location.hash || '#/';
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -228,7 +220,7 @@ onBeforeUnmount(() => {
           {{ playerState === 'playing' ? '再接続' : '聞く' }}
         </button>
         <button type="button" @click="stopListening">停止</button>
-        <button type="button" @click="reconnectBot">Bot 再接続</button>
+        <button type="button" @click="fetchStatus">状態更新</button>
       </div>
 
       <label class="field">

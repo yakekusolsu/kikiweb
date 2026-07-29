@@ -6,3 +6,5 @@ dist
 *.log
 *.tsbuildinfo
 *.timestamp-*.mjs
+__pycache__
+*.pyc
