@@ -10,7 +10,6 @@ from typing import Optional
 import aiohttp
 import davey
 import discord
-from discord import opus
 from discord.ext import voice_recv
 from discord.ext.voice_recv.reader import AudioReader
 
@@ -99,32 +98,17 @@ class KikiWebAudioSink(voice_recv.AudioSink):
     def __init__(self, relay: "KikiWebVoiceRelay") -> None:
         super().__init__()
         self.relay = relay
-        self.decoders: dict[int, opus.Decoder] = {}
         self.pcm_remainders: dict[int, bytes] = {}
 
     def wants_opus(self) -> bool:
-        return True
+        return False
 
     def write(self, user: Optional[discord.abc.User], data: voice_recv.VoiceData) -> None:
         if user is not None and getattr(user, "bot", False):
             return
 
         decoder_key = user.id if user is not None else 0
-        pcm = None
-        opus_packet = getattr(data, "opus", None)
-        if opus_packet:
-            decoder = self.decoders.setdefault(decoder_key, opus.Decoder())
-            try:
-                pcm = decoder.decode(opus_packet, fec=False)
-            except opus.OpusError:
-                self.decoders[decoder_key] = opus.Decoder()
-                self.pcm_remainders.pop(decoder_key, None)
-                LOGGER.warning("KikiWeb skipped a corrupted Discord voice packet and reset that speaker decoder.")
-                return
-
-        if pcm is None:
-            pcm = getattr(data, "pcm", None)
-
+        pcm = getattr(data, "pcm", None)
         if not pcm:
             return
 
@@ -142,7 +126,6 @@ class KikiWebAudioSink(voice_recv.AudioSink):
             self.pcm_remainders.pop(decoder_key, None)
 
     def cleanup(self) -> None:
-        self.decoders.clear()
         self.pcm_remainders.clear()
         self.relay.clear_audio_queue()
 
