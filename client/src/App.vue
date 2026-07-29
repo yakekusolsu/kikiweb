@@ -105,11 +105,11 @@ const startListening = async () => {
     };
 
     compressorNode = audioContext.createDynamicsCompressor();
-    compressorNode.threshold.value = -8;
-    compressorNode.knee.value = 4;
-    compressorNode.ratio.value = 8;
-    compressorNode.attack.value = 0.002;
-    compressorNode.release.value = 0.18;
+    compressorNode.threshold.value = -1;
+    compressorNode.knee.value = 0;
+    compressorNode.ratio.value = 20;
+    compressorNode.attack.value = 0.001;
+    compressorNode.release.value = 0.08;
     workletNode.connect(compressorNode).connect(audioContext.destination);
     await audioContext.resume();
 
