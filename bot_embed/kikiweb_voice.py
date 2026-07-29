@@ -15,6 +15,17 @@ from discord.ext.voice_recv.reader import AudioReader
 
 LOGGER = logging.getLogger(__name__)
 
+
+class _UnexpectedRtcpInfoFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (
+            record.levelno == logging.INFO
+            and record.getMessage().startswith("Received unexpected rtcp packet:")
+        )
+
+
+logging.getLogger("discord.ext.voice_recv.reader").addFilter(_UnexpectedRtcpInfoFilter())
+
 SAMPLE_RATE = 48_000
 CHANNELS = 2
 FRAME_MS = 20
