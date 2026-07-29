@@ -334,22 +334,6 @@ onBeforeUnmount(() => {
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
 
-    <section v-if="currentPage === 'home'" class="settings-panel">
-      <h2>接続設定</h2>
-      <label class="field">
-        <span>Render API URL</span>
-        <input v-model="apiBaseUrl" type="url" placeholder="https://your-service.onrender.com" />
-      </label>
-      <label class="field">
-        <span>Listen token</span>
-        <input v-model="listenToken" type="password" placeholder="LISTEN_TOKEN を設定した場合のみ" />
-      </label>
-      <div class="deploy-notes">
-        <p>Vercel では <code>VITE_API_BASE_URL</code> に Render の URL を入れてください。</p>
-        <p>Render 側で <code>LISTEN_TOKEN</code> を入れた場合、Vercel 側の <code>VITE_LISTEN_TOKEN</code> も同じ値にします。</p>
-      </div>
-    </section>
-
     <article v-if="currentPage === 'terms'" class="document-panel">
       <p class="eyebrow">Terms of Service</p>
       <h1>利用規約</h1>
