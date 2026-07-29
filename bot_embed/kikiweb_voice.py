@@ -73,14 +73,20 @@ class KikiWebVoiceRelay:
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
-        self.session = aiohttp.ClientSession()
-        self.sender_task = asyncio.create_task(self._sender_loop(), name="kikiweb-audio-sender")
+
+        if not self.session or self.session.closed:
+            self.session = aiohttp.ClientSession()
+
+        if not self.sender_task or self.sender_task.done():
+            self.sender_task = asyncio.create_task(self._sender_loop(), name="kikiweb-audio-sender")
 
         if channel.guild.voice_client:
             voice_client = channel.guild.voice_client
             if not isinstance(voice_client, voice_recv.VoiceRecvClient):
-                raise RuntimeError("Existing voice client is not voice_recv.VoiceRecvClient.")
-            await voice_client.move_to(channel)
+                await voice_client.disconnect(force=True)
+                voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+            elif getattr(voice_client.channel, "id", None) != channel.id:
+                await voice_client.move_to(channel)
         else:
             voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
 
