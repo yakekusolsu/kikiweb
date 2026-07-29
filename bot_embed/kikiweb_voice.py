@@ -41,6 +41,7 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         super().__init__()
         self.relay = relay
         self.decoders: dict[int, opus.Decoder] = {}
+        self.muted_frames: dict[int, int] = {}
 
     def wants_opus(self) -> bool:
         return True
@@ -57,19 +58,27 @@ class KikiWebAudioSink(voice_recv.AudioSink):
             try:
                 pcm = decoder.decode(opus_packet, fec=False)
             except opus.OpusError:
-                LOGGER.warning("KikiWeb skipped a corrupted Discord voice packet.")
+                self.decoders[decoder_key] = opus.Decoder()
+                self.muted_frames[decoder_key] = 8
+                LOGGER.warning("KikiWeb skipped a corrupted Discord voice packet and reset that speaker decoder.")
+                return
+
+            muted = self.muted_frames.get(decoder_key, 0)
+            if muted > 0:
+                self.muted_frames[decoder_key] = muted - 1
                 return
 
         if pcm is None:
             pcm = getattr(data, "pcm", None)
 
-        if not pcm:
+        if not pcm or len(pcm) != FRAME_BYTES:
             return
 
         self.relay.enqueue_pcm(bytes(pcm))
 
     def cleanup(self) -> None:
         self.decoders.clear()
+        self.muted_frames.clear()
         self.relay.clear_audio_queue()
 
 
