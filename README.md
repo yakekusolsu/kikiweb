@@ -1,9 +1,10 @@
 # KikiWeb
 
-Discord Bot が接続している VC の音声だけを、ブラウザから聞くための Web サービスです。
+Discord Bot が接続している VC の音声だけを、ブラウザから聞くための Web サービスです。複数の
+Discord サーバーを同時に中継し、Web のサーバーメニューから聞く VC を切り替えられます。
 
 - `client`: Vue.js + Vite。Vercel にデプロイします。
-- `server`: Express + WebSocket の音声 relay。Render にデプロイします。
+- `server`: Node.js + WebSocket の音声 relay。Render にデプロイします。
 - `bot_embed`: 既存 Python Bot に埋め込む KikiWeb 送信用コードです。
 
 ## ローカル起動
@@ -44,6 +45,21 @@ install_kikiweb_commands(
 
 `!kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`!kikiweb_leave` で停止します。
 
+### 複数サーバー
+
+同じ Bot を複数の Discord サーバーへ追加し、各サーバーで `kikiweb_join` を実行できます。relay は
+Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を Web のメニューに表示します。
+
+既存 Bot 側の `main.py` では、Bot 環境変数へ利用を許可する Guild ID をカンマ区切りで設定します。
+元のサーバー ID はコード側で常に許可されます。
+
+```dotenv
+KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
+```
+
+追加サーバーでは `/kikiweb_join` と `/kikiweb_leave` だけが同期されます。サーバー管理権限を持つ
+メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
+
 ## Render
 
 Render ではこのリポジトリの `render.yaml` を使えます。環境変数は Render のダッシュボードで設定してください。
@@ -53,6 +69,7 @@ Render ではこのリポジトリの `render.yaml` を使えます。環境変�
 - `LISTEN_TOKEN`: 任意。設定すると、この値を知っている人だけが聞けます。
 
 Discord Bot の `DISCORD_TOKEN` は Render ではなく、既存 Python Bot を動かしている環境に設定してください。
+複数サーバーでも Render の `INGEST_TOKEN` と Bot の `KIKIWEB_INGEST_TOKEN` は同じ1組を使います。
 
 ## Vercel
 

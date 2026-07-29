@@ -20,7 +20,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -150,6 +151,27 @@ code {
   display: flex;
   gap: 16px;
   align-items: center;
+}
+
+.server-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+  margin-top: 26px;
+  border-top: 1px solid #dfe5e1;
+  border-bottom: 1px solid #dfe5e1;
+  padding: 18px 0;
+}
+
+.server-picker .field {
+  margin-top: 0;
+}
+
+.server-picker p {
+  padding-bottom: 12px;
+  color: #61706f;
+  font-size: 0.9rem;
 }
 
 .mark {
@@ -312,7 +334,8 @@ h2 {
 }
 
 .field input[type="url"],
-.field input[type="password"] {
+.field input[type="password"],
+.field select {
   width: 100%;
   min-height: 44px;
   border: 1px solid #cfd9d4;
@@ -320,6 +343,11 @@ h2 {
   padding: 0 12px;
   color: #18202a;
   background: #ffffff;
+}
+
+.field select:disabled {
+  color: #61706f;
+  background: #f1f3f0;
 }
 
 .field input[type="range"] {
@@ -395,6 +423,15 @@ h2 {
 
   .status-strip {
     grid-template-columns: 1fr;
+  }
+
+  .server-picker {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .server-picker p {
+    padding-bottom: 0;
   }
 
   .player-surface {

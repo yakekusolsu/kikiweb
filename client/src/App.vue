@@ -1,7 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
+type ServerStatus = {
+  id: string;
+  name: string;
+  channelId: string;
+  channelName: string;
+  state: string;
+  listeners: number;
+  activeSpeakers: number;
+  lastAudioAt: number;
+  lastIngestAt: number;
+};
+
 type ApiStatus = {
+  servers: ServerStatus[];
   listeners: number;
   mixerActiveSpeakers: number;
   lastAudioAt: number;
@@ -28,6 +41,7 @@ const playerError = ref('');
 const volume = ref(85);
 const bufferMs = ref(0);
 const underruns = ref(0);
+const selectedServerId = ref(window.localStorage.getItem('kikiweb-server-id') || '');
 const route = ref(window.location.hash || '#/');
 
 let socket: WebSocket | null = null;
@@ -41,8 +55,12 @@ const currentPage = computed(() => {
   if (route.value === '#/privacy') return 'privacy';
   return 'home';
 });
+const availableServers = computed(() => status.value?.servers ?? []);
+const selectedServer = computed(
+  () => availableServers.value.find((server) => server.id === selectedServerId.value) ?? null,
+);
 const stateLabel = computed(() => {
-  const state = status.value?.discord.state;
+  const state = selectedServer.value?.state;
   if (state === 'ready') return 'VC 接続中';
   if (state === 'waiting-for-bot') return 'Bot 接続待ち';
   if (state === 'starting') return '起動中';
@@ -56,6 +74,9 @@ const wsUrl = computed(() => {
   const url = new URL(normalizedApiUrl.value);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/audio';
+  if (selectedServerId.value) {
+    url.searchParams.set('serverId', selectedServerId.value);
+  }
   if (listenToken.value) {
     url.searchParams.set('token', listenToken.value);
   }
@@ -67,7 +88,15 @@ const fetchStatus = async () => {
   try {
     const response = await fetch(`${normalizedApiUrl.value}/status`);
     if (!response.ok) throw new Error(`status ${response.status}`);
-    status.value = await response.json();
+    const nextStatus = (await response.json()) as ApiStatus;
+    const serverList = nextStatus.servers ?? [];
+    status.value = { ...nextStatus, servers: serverList };
+
+    const currentExists = serverList.some((server) => server.id === selectedServerId.value);
+    if (!currentExists) {
+      selectedServerId.value =
+        serverList.find((server) => server.state === 'ready')?.id ?? serverList[0]?.id ?? '';
+    }
   } catch (error) {
     statusError.value = error instanceof Error ? error.message : String(error);
   }
@@ -81,6 +110,9 @@ const startListening = async () => {
   underruns.value = 0;
 
   try {
+    if (!selectedServerId.value) {
+      throw new Error('接続中のDiscordサーバーがありません。');
+    }
     if (!('AudioWorkletNode' in window)) {
       throw new Error('このブラウザは AudioWorklet に対応していません。');
     }
@@ -105,14 +137,17 @@ const startListening = async () => {
     workletNode.connect(audioContext.destination);
     await audioContext.resume();
 
-    socket = new WebSocket(wsUrl.value);
-    socket.binaryType = 'arraybuffer';
+    const nextSocket = new WebSocket(wsUrl.value);
+    socket = nextSocket;
+    nextSocket.binaryType = 'arraybuffer';
 
-    socket.onopen = () => {
+    nextSocket.onopen = () => {
+      if (socket !== nextSocket) return;
       playerState.value = 'playing';
     };
 
-    socket.onmessage = async (event) => {
+    nextSocket.onmessage = async (event) => {
+      if (socket !== nextSocket) return;
       if (typeof event.data === 'string') return;
       workletNode?.port.postMessage(
         {
@@ -123,12 +158,14 @@ const startListening = async () => {
       );
     };
 
-    socket.onerror = () => {
+    nextSocket.onerror = () => {
+      if (socket !== nextSocket) return;
       playerState.value = 'error';
       playerError.value = '音声サーバーに接続できませんでした。URL とトークンを確認してください。';
     };
 
-    socket.onclose = () => {
+    nextSocket.onclose = () => {
+      if (socket !== nextSocket) return;
       if (playerState.value === 'playing' || playerState.value === 'connecting') {
         playerState.value = 'stopped';
       }
@@ -140,7 +177,13 @@ const startListening = async () => {
 };
 
 const stopListening = () => {
-  socket?.close();
+  if (socket) {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    socket.close();
+  }
   socket = null;
   workletNode?.disconnect();
   workletNode?.port.close();
@@ -164,6 +207,22 @@ window.addEventListener('hashchange', syncRoute);
 
 watch(volume, (value) => {
   workletNode?.port.postMessage({ type: 'volume', value: value / 100 });
+});
+
+watch(selectedServerId, (value, previousValue) => {
+  if (value) {
+    window.localStorage.setItem('kikiweb-server-id', value);
+  } else {
+    window.localStorage.removeItem('kikiweb-server-id');
+  }
+
+  if (
+    previousValue &&
+    value !== previousValue &&
+    (playerState.value === 'playing' || playerState.value === 'connecting')
+  ) {
+    void startListening();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -192,6 +251,27 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <div class="server-picker">
+        <label class="field">
+          <span>Discord server</span>
+          <select v-model="selectedServerId" :disabled="availableServers.length === 0">
+            <option disabled value="">
+              {{ availableServers.length === 0 ? '接続中のサーバーなし' : 'サーバーを選択' }}
+            </option>
+            <option v-for="server in availableServers" :key="server.id" :value="server.id">
+              {{ server.name }}
+            </option>
+          </select>
+        </label>
+        <p>
+          {{
+            selectedServer
+              ? `${selectedServer.channelName} / ${selectedServer.state === 'ready' ? '配信中' : 'Bot接続待ち'}`
+              : 'Botからの接続を待っています'
+          }}
+        </p>
+      </div>
+
       <div class="status-strip">
         <div>
           <span>Bot</span>
@@ -199,11 +279,11 @@ onBeforeUnmount(() => {
         </div>
         <div>
           <span>Listeners</span>
-          <strong>{{ status?.listeners ?? 0 }}</strong>
+          <strong>{{ selectedServer?.listeners ?? 0 }}</strong>
         </div>
         <div>
           <span>Speakers</span>
-          <strong>{{ status?.discord.activeSpeakers ?? 0 }}</strong>
+          <strong>{{ selectedServer?.activeSpeakers ?? 0 }}</strong>
         </div>
       </div>
 
@@ -217,13 +297,22 @@ onBeforeUnmount(() => {
         <div>
           <p class="player-label">{{ playerState === 'playing' ? 'Live audio' : 'Ready to listen' }}</p>
           <p class="player-copy">
-            Bot が接続している VC の音声だけを、このページで再生します。
+            {{
+              selectedServer
+                ? `${selectedServer.name} の ${selectedServer.channelName} を再生します。`
+                : 'Bot が接続している VC を選択すると再生できます。'
+            }}
           </p>
         </div>
       </div>
 
       <div class="actions">
-        <button class="primary" type="button" :disabled="playerState === 'connecting'" @click="startListening">
+        <button
+          class="primary"
+          type="button"
+          :disabled="playerState === 'connecting' || !selectedServer"
+          @click="startListening"
+        >
           {{ playerState === 'playing' ? '再接続' : '聞く' }}
         </button>
         <button type="button" @click="stopListening">停止</button>

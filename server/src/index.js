@@ -3,7 +3,7 @@ import { WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, SAMPLE_RATE } from './audioMixer.js';
 import { config } from './config.js';
 
-const mixer = new AudioMixer();
+const streams = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
   response.setHeader('Access-Control-Allow-Origin', origin);
@@ -45,31 +45,81 @@ const server = createServer(async (request, response) => {
   sendJson(response, 404, { ok: false, error: 'Not found.' });
 });
 const wss = new WebSocketServer({ noServer: true });
-let ingestClient = null;
-let lastIngestAt = 0;
 
 const publicStatus = () => ({
   ok: true,
   sampleRate: SAMPLE_RATE,
   channels: CHANNELS,
-  listeners: mixer.clientCount(),
-  mixerActiveSpeakers: mixer.activeSpeakerCount(),
-  lastAudioAt: mixer.getLastAudioAt(),
+  servers: [...streams.values()].map(publicStreamStatus),
+  listeners: [...streams.values()].reduce((total, stream) => total + stream.mixer.clientCount(), 0),
+  mixerActiveSpeakers: [...streams.values()].reduce(
+    (total, stream) => total + stream.mixer.activeSpeakerCount(),
+    0,
+  ),
+  lastAudioAt: Math.max(0, ...[...streams.values()].map((stream) => stream.mixer.getLastAudioAt())),
   discord: {
-    state: ingestClient ? 'ready' : 'waiting-for-bot',
+    state: [...streams.values()].some((stream) => stream.ingestClient) ? 'ready' : 'waiting-for-bot',
     error: '',
-    activeSpeakers: mixer.activeSpeakerCount(),
+    activeSpeakers: [...streams.values()].reduce(
+      (total, stream) => total + stream.mixer.activeSpeakerCount(),
+      0,
+    ),
     connectedGuildId: null,
     connectedVoiceChannelId: null,
     botUser: null,
   },
   relay: {
-    ingestConnected: Boolean(ingestClient),
-    lastIngestAt,
+    ingestConnected: [...streams.values()].some((stream) => stream.ingestClient),
+    lastIngestAt: Math.max(0, ...[...streams.values()].map((stream) => stream.lastIngestAt)),
   },
   hasListenToken: Boolean(config.listenToken),
   hasIngestToken: Boolean(config.ingestToken),
 });
+
+const publicStreamStatus = (stream) => ({
+  id: stream.id,
+  name: stream.name,
+  channelId: stream.channelId,
+  channelName: stream.channelName,
+  state: stream.ingestClient ? 'ready' : 'waiting-for-bot',
+  listeners: stream.mixer.clientCount(),
+  activeSpeakers: stream.mixer.activeSpeakerCount(),
+  lastAudioAt: stream.mixer.getLastAudioAt(),
+  lastIngestAt: stream.lastIngestAt,
+});
+
+const safeLabel = (value, fallback) => {
+  const normalized = String(value ?? '').trim().slice(0, 100);
+  return normalized || fallback;
+};
+
+const streamFromIngestUrl = (url) => {
+  const id = safeLabel(url.searchParams.get('serverId'), 'default');
+  let stream = streams.get(id);
+  if (!stream) {
+    stream = {
+      id,
+      name: safeLabel(url.searchParams.get('serverName'), `Discord ${id}`),
+      channelId: safeLabel(url.searchParams.get('channelId'), ''),
+      channelName: safeLabel(url.searchParams.get('channelName'), 'Voice channel'),
+      ingestClient: null,
+      lastIngestAt: 0,
+      mixer: new AudioMixer(),
+    };
+    streams.set(id, stream);
+  } else {
+    stream.name = safeLabel(url.searchParams.get('serverName'), stream.name);
+    stream.channelId = safeLabel(url.searchParams.get('channelId'), stream.channelId);
+    stream.channelName = safeLabel(url.searchParams.get('channelName'), stream.channelName);
+  }
+  return stream;
+};
+
+const resolveAudioStream = (url) => {
+  const requestedId = url.searchParams.get('serverId');
+  if (requestedId) return streams.get(requestedId) ?? null;
+  return [...streams.values()].find((stream) => stream.ingestClient) ?? streams.values().next().value ?? null;
+};
 
 const sendJson = (response, statusCode, body) => {
   response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
@@ -91,31 +141,33 @@ server.on('upgrade', (request, socket, head) => {
   }
 
   wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request, url.pathname);
+    wss.emit('connection', ws, request, url);
   });
 });
 
-wss.on('connection', (ws, _request, pathname) => {
-  if (pathname === '/ingest') {
-    if (ingestClient) {
-      ingestClient.close(1012, 'Another ingest client connected.');
+wss.on('connection', (ws, _request, url) => {
+  if (url.pathname === '/ingest') {
+    const stream = streamFromIngestUrl(url);
+    if (stream.ingestClient) {
+      stream.ingestClient.close(1012, 'Another ingest client connected for this server.');
     }
 
-    ingestClient = ws;
+    stream.ingestClient = ws;
     ws.on('message', (message, isBinary) => {
       if (!isBinary || !Buffer.isBuffer(message)) return;
-      lastIngestAt = Date.now();
-      mixer.feed('python-bot', message);
+      stream.lastIngestAt = Date.now();
+      stream.mixer.feed('python-bot', message);
     });
     ws.on('close', () => {
-      if (ingestClient === ws) {
-        ingestClient = null;
-        mixer.removeInput('python-bot');
+      if (stream.ingestClient === ws) {
+        stream.ingestClient = null;
+        stream.mixer.removeInput('python-bot');
       }
     });
     ws.send(
       JSON.stringify({
         type: 'ingest-ready',
+        serverId: stream.id,
         sampleRate: SAMPLE_RATE,
         channels: CHANNELS,
       }),
@@ -123,11 +175,18 @@ wss.on('connection', (ws, _request, pathname) => {
     return;
   }
 
-  if (pathname === '/audio') {
-    mixer.addClient(ws);
+  if (url.pathname === '/audio') {
+    const stream = resolveAudioStream(url);
+    if (!stream) {
+      ws.close(1013, 'No Discord server is connected.');
+      return;
+    }
+
+    stream.mixer.addClient(ws);
     ws.send(
       JSON.stringify({
         type: 'hello',
+        server: publicStreamStatus(stream),
         sampleRate: SAMPLE_RATE,
         channels: CHANNELS,
       }),
@@ -135,12 +194,19 @@ wss.on('connection', (ws, _request, pathname) => {
   }
 });
 
-const heartbeat = setInterval(() => mixer.heartbeat(), 30_000);
+const heartbeat = setInterval(() => {
+  for (const stream of streams.values()) {
+    stream.mixer.heartbeat();
+  }
+}, 30_000);
 
 const shutdown = async () => {
   clearInterval(heartbeat);
-  ingestClient?.close();
-  mixer.close();
+  for (const stream of streams.values()) {
+    stream.ingestClient?.close();
+    stream.mixer.close();
+  }
+  streams.clear();
   server.close(() => process.exit(0));
 };
 

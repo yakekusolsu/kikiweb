@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 import davey
@@ -42,12 +43,27 @@ class KikiWebConfig:
     listen_restart_delay: float = 1.0
     queue_size: int = 160
 
-    def websocket_url(self) -> str:
-        if not self.ingest_token:
-            return self.relay_url
-
-        separator = "&" if "?" in self.relay_url else "?"
-        return f"{self.relay_url}{separator}token={self.ingest_token}"
+    def websocket_url(
+        self,
+        *,
+        server_id: int,
+        server_name: str,
+        channel_id: int,
+        channel_name: str,
+    ) -> str:
+        parts = urlsplit(self.relay_url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query.update(
+            {
+                "serverId": str(server_id),
+                "serverName": server_name,
+                "channelId": str(channel_id),
+                "channelName": channel_name,
+            }
+        )
+        if self.ingest_token:
+            query["token"] = self.ingest_token
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 class KikiWebDAVEAudioReader(AudioReader):
@@ -153,16 +169,31 @@ class KikiWebVoiceRelay:
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.closed = asyncio.Event()
+        self.server_id = 0
+        self.server_name = ""
+        self.channel_id = 0
+        self.channel_name = ""
 
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
+        metadata_changed = self.server_id != channel.guild.id or self.channel_id != channel.id
+        self.server_id = channel.guild.id
+        self.server_name = channel.guild.name
+        self.channel_id = channel.id
+        self.channel_name = channel.name
 
         if not self.session or self.session.closed:
             self.session = aiohttp.ClientSession()
 
+        if metadata_changed and self.socket and not self.socket.closed:
+            await self.socket.close(code=1012, message=b"Voice stream changed")
+
         if not self.sender_task or self.sender_task.done():
-            self.sender_task = asyncio.create_task(self._sender_loop(), name="kikiweb-audio-sender")
+            self.sender_task = asyncio.create_task(
+                self._sender_loop(),
+                name=f"kikiweb-audio-sender-{channel.guild.id}",
+            )
 
         if channel.guild.voice_client:
             voice_client = channel.guild.voice_client
@@ -283,7 +314,12 @@ class KikiWebVoiceRelay:
 
                 LOGGER.info("Connecting to KikiWeb relay: %s", self.config.relay_url)
                 async with self.session.ws_connect(
-                    self.config.websocket_url(),
+                    self.config.websocket_url(
+                        server_id=self.server_id,
+                        server_name=self.server_name,
+                        channel_id=self.channel_id,
+                        channel_name=self.channel_name,
+                    ),
                     heartbeat=25,
                     max_msg_size=0,
                 ) as socket:
@@ -291,7 +327,10 @@ class KikiWebVoiceRelay:
                     LOGGER.info("KikiWeb relay connected")
 
                     while not self.closed.is_set() and not socket.closed:
-                        frame = await self.queue.get()
+                        try:
+                            frame = await asyncio.wait_for(self.queue.get(), timeout=1)
+                        except asyncio.TimeoutError:
+                            continue
                         try:
                             await socket.send_bytes(frame)
                         finally:
@@ -305,14 +344,41 @@ class KikiWebVoiceRelay:
                 self.socket = None
 
 
+class KikiWebRelayManager:
+    def __init__(self, config: KikiWebConfig) -> None:
+        self.config = config
+        self.relays: dict[int, KikiWebVoiceRelay] = {}
+
+    async def connect(
+        self,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> KikiWebVoiceRelay:
+        relay = self.relays.get(channel.guild.id)
+        if relay is None:
+            relay = KikiWebVoiceRelay(self.config)
+            self.relays[channel.guild.id] = relay
+        await relay.connect(channel)
+        return relay
+
+    async def disconnect(self, guild_id: int) -> None:
+        relay = self.relays.pop(guild_id, None)
+        if relay is not None:
+            await relay.disconnect()
+
+    async def disconnect_all(self) -> None:
+        relays = list(self.relays.values())
+        self.relays.clear()
+        await asyncio.gather(*(relay.disconnect() for relay in relays), return_exceptions=True)
+
+
 def install_kikiweb_commands(
     bot,
     *,
     relay_url: str,
     ingest_token: str = "",
     command_prefix: str = "kikiweb",
-) -> KikiWebVoiceRelay:
-    relay = KikiWebVoiceRelay(KikiWebConfig(relay_url=relay_url, ingest_token=ingest_token))
+) -> KikiWebRelayManager:
+    manager = KikiWebRelayManager(KikiWebConfig(relay_url=relay_url, ingest_token=ingest_token))
 
     @bot.command(name=f"{command_prefix}_join")
     async def kikiweb_join(ctx):
@@ -320,12 +386,12 @@ def install_kikiweb_commands(
             await ctx.reply("VC に入ってから実行してください。")
             return
 
-        await relay.connect(ctx.author.voice.channel)
+        await manager.connect(ctx.author.voice.channel)
         await ctx.reply("KikiWeb への音声中継を開始しました。")
 
     @bot.command(name=f"{command_prefix}_leave")
     async def kikiweb_leave(ctx):
-        await relay.disconnect()
+        await manager.disconnect(ctx.guild.id)
         await ctx.reply("KikiWeb への音声中継を停止しました。")
 
-    return relay
+    return manager
