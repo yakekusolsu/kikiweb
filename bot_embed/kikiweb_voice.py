@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
+import davey
 import discord
 from discord import opus
 from discord.ext import voice_recv
+from discord.ext.voice_recv.reader import AudioReader
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +21,7 @@ CHANNELS = 2
 FRAME_MS = 20
 BYTES_PER_SAMPLE = 2
 FRAME_BYTES = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_MS // 1000
+OPUS_SILENCE = b"\xf8\xff\xfe"
 
 
 @dataclass(slots=True)
@@ -34,6 +38,61 @@ class KikiWebConfig:
 
         separator = "&" if "?" in self.relay_url else "?"
         return f"{self.relay_url}{separator}token={self.ingest_token}"
+
+
+class KikiWebDAVEAudioReader(AudioReader):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._transport_decrypt_rtp = self.decryptor.decrypt_rtp
+        self._last_dave_error_log_at = 0.0
+        self.decryptor.decrypt_rtp = self._decrypt_rtp
+
+    def _decrypt_rtp(self, packet) -> bytes:
+        payload = self._transport_decrypt_rtp(packet)
+
+        if packet.padding:
+            if not payload:
+                return OPUS_SILENCE
+            padding_size = payload[-1]
+            if padding_size == 0 or padding_size > len(payload):
+                self._log_dave_error("KikiWeb dropped an RTP packet with invalid padding.")
+                return OPUS_SILENCE
+            payload = payload[:-padding_size]
+
+        connection = self.voice_client._connection
+        if getattr(connection, "dave_protocol_version", 0) == 0:
+            return payload
+
+        dave_session = getattr(connection, "dave_session", None)
+        user_id = self.voice_client._get_id_from_ssrc(packet.ssrc)
+        if dave_session is None or not dave_session.ready or user_id is None:
+            return OPUS_SILENCE
+
+        try:
+            return dave_session.decrypt(user_id, davey.MediaType.audio, payload)
+        except Exception as error:
+            self._log_dave_error("KikiWeb dropped a DAVE packet that could not be decrypted: %s", error)
+            return OPUS_SILENCE
+
+    def _log_dave_error(self, message: str, *args) -> None:
+        now = time.monotonic()
+        if now - self._last_dave_error_log_at < 5:
+            return
+        self._last_dave_error_log_at = now
+        LOGGER.warning(message, *args)
+
+
+class KikiWebVoiceRecvClient(voice_recv.VoiceRecvClient):
+    def listen(self, sink: voice_recv.AudioSink, *, after=None) -> None:
+        if not self.is_connected():
+            raise discord.ClientException("Not connected to voice.")
+        if not isinstance(sink, voice_recv.AudioSink):
+            raise TypeError(f"sink must be an AudioSink, not {sink.__class__.__name__}")
+        if self.is_listening():
+            raise discord.ClientException("Already receiving audio.")
+
+        self._reader = KikiWebDAVEAudioReader(sink, self, after=after)
+        self._reader.start()
 
 
 class KikiWebAudioSink(voice_recv.AudioSink):
@@ -91,7 +150,7 @@ class KikiWebAudioSink(voice_recv.AudioSink):
 class KikiWebVoiceRelay:
     def __init__(self, config: KikiWebConfig) -> None:
         self.config = config
-        self.voice_client: Optional[voice_recv.VoiceRecvClient] = None
+        self.voice_client: Optional[KikiWebVoiceRecvClient] = None
         self.sink: Optional[KikiWebAudioSink] = None
         self.session: Optional[aiohttp.ClientSession] = None
         self.socket: Optional[aiohttp.ClientWebSocketResponse] = None
@@ -113,13 +172,13 @@ class KikiWebVoiceRelay:
 
         if channel.guild.voice_client:
             voice_client = channel.guild.voice_client
-            if not isinstance(voice_client, voice_recv.VoiceRecvClient):
+            if not isinstance(voice_client, KikiWebVoiceRecvClient):
                 await voice_client.disconnect(force=True)
-                voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+                voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=True)
             elif getattr(voice_client.channel, "id", None) != channel.id:
                 await voice_client.move_to(channel)
         else:
-            voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient, self_deaf=False, self_mute=True)
+            voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=True)
 
         self.voice_client = voice_client
         self._start_listening()

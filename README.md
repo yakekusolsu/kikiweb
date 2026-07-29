@@ -22,7 +22,8 @@ npm run dev --prefix client
 
 ## Python Bot への組み込み
 
-Bot 側では Discord の VC 音声を受信するために `discord-ext-voice-recv` を使います。
+Bot 側では Discord の VC 音声を受信するために `discord-ext-voice-recv` を使います。通常 VC の DAVE
+E2EE 音声を受信するため、`discord.py 2.7.1` 以降と `davey` も必要です。
 
 ```bash
 pip install -r bot_embed/requirements.txt
@@ -64,4 +65,6 @@ Vercel の Project Root は `client` にしてください。
 
 Discord VC の音声を配信するため、参加者に用途を説明し、サーバーのルールと各地域の法律を守って使ってください。
 
-`discord-ext-voice-recv` は Discord VC 受信用の拡張です。ライブラリ側でも、まだ安定性保証は限定的で Discord の仕様変更に影響される可能性があると説明されています。
+`discord-ext-voice-recv` は Discord VC 受信用の拡張です。KikiWeb の組み込みコードは、transport
+復号後に DAVE 復号を行ってから Opus を PCM に変換します。ライブラリ側でも安定性保証は限定的で、
+Discord の仕様変更に影響される可能性があります。
