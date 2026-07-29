@@ -41,6 +41,7 @@ class KikiWebConfig:
     ingest_token: str = ""
     reconnect_delay: float = 3.0
     listen_restart_delay: float = 1.0
+    status_interval: float = 1.0
     queue_size: int = 160
 
     def websocket_url(
@@ -297,6 +298,20 @@ class KikiWebVoiceRelay:
             name="kikiweb-listen-restarter",
         )
 
+    def _voice_status(self) -> dict[str, int | str]:
+        channel = getattr(self.voice_client, "channel", None)
+        members = [member for member in getattr(channel, "members", []) if not member.bot]
+        muted_members = sum(
+            1
+            for member in members
+            if member.voice is not None and (member.voice.self_mute or member.voice.mute)
+        )
+        return {
+            "type": "voice-status",
+            "memberCount": len(members),
+            "mutedCount": muted_members,
+        }
+
     async def _restart_listening(self) -> None:
         await asyncio.sleep(self.config.listen_restart_delay)
         if self.closed.is_set() or not self.voice_client or not self.voice_client.is_connected():
@@ -334,8 +349,14 @@ class KikiWebVoiceRelay:
                 ) as socket:
                     self.socket = socket
                     LOGGER.info("KikiWeb relay connected")
+                    next_status_at = 0.0
 
                     while not self.closed.is_set() and not socket.closed:
+                        now = time.monotonic()
+                        if now >= next_status_at:
+                            await socket.send_json(self._voice_status())
+                            next_status_at = now + self.config.status_interval
+
                         try:
                             frame = await asyncio.wait_for(self.queue.get(), timeout=1)
                         except asyncio.TimeoutError:

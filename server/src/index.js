@@ -87,6 +87,8 @@ const publicStreamStatus = (stream) => ({
   state: stream.ingestClient ? 'ready' : 'waiting-for-bot',
   listeners: stream.mixer.clientCount(),
   activeSpeakers: stream.mixer.activeSpeakerCount(),
+  memberCount: stream.memberCount,
+  mutedCount: stream.mutedCount,
   lastAudioAt: stream.mixer.getLastAudioAt(),
   lastIngestAt: stream.lastIngestAt,
 });
@@ -114,6 +116,8 @@ const streamFromIngestUrl = (url) => {
       channelName,
       ingestClient: null,
       lastIngestAt: 0,
+      memberCount: 0,
+      mutedCount: 0,
       mixer: new AudioMixer(),
     };
     streams.set(id, stream);
@@ -132,6 +136,12 @@ const resolveAudioStream = (url) => {
     return stream?.ingestClient ? stream : null;
   }
   return [...streams.values()].find((stream) => stream.ingestClient) ?? null;
+};
+
+const parseCount = (value) => {
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) return null;
+  return Math.min(count, 100_000);
 };
 
 const sendJson = (response, statusCode, body) => {
@@ -171,8 +181,25 @@ wss.on('connection', (ws, _request, url) => {
     }
 
     stream.ingestClient = ws;
+    stream.memberCount = 0;
+    stream.mutedCount = 0;
     ws.on('message', (message, isBinary) => {
-      if (!isBinary || !Buffer.isBuffer(message)) return;
+      if (!isBinary) {
+        try {
+          const payload = JSON.parse(message.toString());
+          if (payload.type !== 'voice-status') return;
+          const memberCount = parseCount(payload.memberCount);
+          const mutedCount = parseCount(payload.mutedCount);
+          if (memberCount === null || mutedCount === null) return;
+          stream.memberCount = memberCount;
+          stream.mutedCount = Math.min(mutedCount, memberCount);
+        } catch {
+          // Ignore malformed status messages while keeping the audio stream alive.
+        }
+        return;
+      }
+
+      if (!Buffer.isBuffer(message)) return;
       stream.lastIngestAt = Date.now();
       stream.mixer.feed('python-bot', message);
     });

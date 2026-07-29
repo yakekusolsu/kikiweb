@@ -9,6 +9,8 @@ type ServerStatus = {
   state: string;
   listeners: number;
   activeSpeakers: number;
+  memberCount: number;
+  mutedCount: number;
   lastAudioAt: number;
   lastIngestAt: number;
 };
@@ -289,6 +291,10 @@ onBeforeUnmount(() => {
         <div>
           <span>Speakers</span>
           <strong>{{ selectedServer?.activeSpeakers ?? 0 }}</strong>
+        </div>
+        <div>
+          <span>Muted</span>
+          <strong>{{ selectedServer?.mutedCount ?? 0 }} / {{ selectedServer?.memberCount ?? 0 }}</strong>
         </div>
       </div>
 
