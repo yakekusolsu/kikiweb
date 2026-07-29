@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import aiohttp
 import davey
 import discord
+import imageio_ffmpeg
 from discord.ext import voice_recv
 from discord.ext.voice_recv.reader import AudioReader
 
@@ -290,7 +291,7 @@ class KikiWebVoiceRelay:
                 normalized_volume = 1.0
 
             process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
+                imageio_ffmpeg.get_ffmpeg_exe(),
                 "-hide_banner",
                 "-loglevel",
                 "error",

@@ -64,7 +64,8 @@ KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 
 Discord の `voice_channel_effect` イベントからサウンドボード音源を取得し、通常のVC音声とは別レーンで
 ブラウザへ送ります。各リスナーはWeb上の「サウンドボード」トグルで個別にON/OFFできます。
-Botを動かす環境には、音源を48kHzステレオPCMへ変換するための `ffmpeg` が必要です。
+音源の48kHzステレオPCM変換には、`requirements.txt`で導入される`imageio-ffmpeg`同梱の
+FFmpegバイナリを使用するため、OS側への別途インストールは不要です。
 
 ## Render
 
