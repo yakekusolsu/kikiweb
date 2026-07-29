@@ -1,0 +1,8 @@
+{
+  "name": "kikiweb",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix server & npm run dev --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client"
+  }
+}

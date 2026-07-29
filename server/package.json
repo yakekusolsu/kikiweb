@@ -1,0 +1,27 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "Discord voice receive and browser audio streaming API for KikiWeb.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "build": "node --check src/index.js && node --check src/discordVoice.js && node --check src/audioMixer.js && node --check src/config.js",
+    "start": "node src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
+    "cors": "^2.8.6",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "opusscript": "^0.0.8",
+    "prism-media": "^1.3.5",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {}
+}
