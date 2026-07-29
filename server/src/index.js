@@ -46,35 +46,38 @@ const server = createServer(async (request, response) => {
 });
 const wss = new WebSocketServer({ noServer: true });
 
-const publicStatus = () => ({
-  ok: true,
-  sampleRate: SAMPLE_RATE,
-  channels: CHANNELS,
-  servers: [...streams.values()].map(publicStreamStatus),
-  listeners: [...streams.values()].reduce((total, stream) => total + stream.mixer.clientCount(), 0),
-  mixerActiveSpeakers: [...streams.values()].reduce(
-    (total, stream) => total + stream.mixer.activeSpeakerCount(),
-    0,
-  ),
-  lastAudioAt: Math.max(0, ...[...streams.values()].map((stream) => stream.mixer.getLastAudioAt())),
-  discord: {
-    state: [...streams.values()].some((stream) => stream.ingestClient) ? 'ready' : 'waiting-for-bot',
-    error: '',
-    activeSpeakers: [...streams.values()].reduce(
+const publicStatus = () => {
+  const activeStreams = [...streams.values()].filter((stream) => stream.ingestClient);
+  return {
+    ok: true,
+    sampleRate: SAMPLE_RATE,
+    channels: CHANNELS,
+    servers: activeStreams.map(publicStreamStatus),
+    listeners: activeStreams.reduce((total, stream) => total + stream.mixer.clientCount(), 0),
+    mixerActiveSpeakers: activeStreams.reduce(
       (total, stream) => total + stream.mixer.activeSpeakerCount(),
       0,
     ),
-    connectedGuildId: null,
-    connectedVoiceChannelId: null,
-    botUser: null,
-  },
-  relay: {
-    ingestConnected: [...streams.values()].some((stream) => stream.ingestClient),
-    lastIngestAt: Math.max(0, ...[...streams.values()].map((stream) => stream.lastIngestAt)),
-  },
-  hasListenToken: Boolean(config.listenToken),
-  hasIngestToken: Boolean(config.ingestToken),
-});
+    lastAudioAt: Math.max(0, ...activeStreams.map((stream) => stream.mixer.getLastAudioAt())),
+    discord: {
+      state: activeStreams.length > 0 ? 'ready' : 'waiting-for-bot',
+      error: '',
+      activeSpeakers: activeStreams.reduce(
+        (total, stream) => total + stream.mixer.activeSpeakerCount(),
+        0,
+      ),
+      connectedGuildId: null,
+      connectedVoiceChannelId: null,
+      botUser: null,
+    },
+    relay: {
+      ingestConnected: activeStreams.length > 0,
+      lastIngestAt: Math.max(0, ...activeStreams.map((stream) => stream.lastIngestAt)),
+    },
+    hasListenToken: Boolean(config.listenToken),
+    hasIngestToken: Boolean(config.ingestToken),
+  };
+};
 
 const publicStreamStatus = (stream) => ({
   id: stream.id,
@@ -124,8 +127,11 @@ const streamFromIngestUrl = (url) => {
 
 const resolveAudioStream = (url) => {
   const requestedId = url.searchParams.get('serverId');
-  if (requestedId) return streams.get(requestedId) ?? null;
-  return [...streams.values()].find((stream) => stream.ingestClient) ?? streams.values().next().value ?? null;
+  if (requestedId) {
+    const stream = streams.get(requestedId);
+    return stream?.ingestClient ? stream : null;
+  }
+  return [...streams.values()].find((stream) => stream.ingestClient) ?? null;
 };
 
 const sendJson = (response, statusCode, body) => {

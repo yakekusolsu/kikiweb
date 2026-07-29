@@ -221,7 +221,12 @@ watch(selectedServerId, (value, previousValue) => {
     value !== previousValue &&
     (playerState.value === 'playing' || playerState.value === 'connecting')
   ) {
-    void startListening();
+    if (value) {
+      void startListening();
+    } else {
+      stopListening();
+      playerError.value = '';
+    }
   }
 });
 
