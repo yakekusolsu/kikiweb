@@ -349,6 +349,63 @@ h2 {
   accent-color: #c8523b;
 }
 
+.soundboard-toggle {
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 32px;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+  border-top: 1px solid #dfe5e1;
+  padding-top: 14px;
+  color: #344748;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.soundboard-toggle input {
+  width: 44px;
+  height: 24px;
+  position: relative;
+  appearance: none;
+  border: 1px solid #aebcba;
+  border-radius: 999px;
+  background: #dfe5e1;
+  cursor: pointer;
+}
+
+.soundboard-toggle input::before {
+  width: 18px;
+  height: 18px;
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(24, 32, 42, 0.22);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.soundboard-toggle input:checked {
+  border-color: #183f4a;
+  background: #183f4a;
+}
+
+.soundboard-toggle input:checked::before {
+  transform: translateX(18px);
+}
+
+.soundboard-toggle input:focus-visible {
+  outline: 3px solid rgba(200, 82, 59, 0.3);
+  outline-offset: 2px;
+}
+
+.soundboard-toggle strong {
+  color: #17262c;
+  font-size: 0.85rem;
+}
+
 .audio-meter {
   display: flex;
   flex-wrap: wrap;

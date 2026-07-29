@@ -60,6 +60,12 @@ KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 追加サーバーでは `/kikiweb_join` と `/kikiweb_leave` だけが同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
 
+### サウンドボード
+
+Discord の `voice_channel_effect` イベントからサウンドボード音源を取得し、通常のVC音声とは別レーンで
+ブラウザへ送ります。各リスナーはWeb上の「サウンドボード」トグルで個別にON/OFFできます。
+Botを動かす環境には、音源を48kHzステレオPCMへ変換するための `ffmpeg` が必要です。
+
 ## Render
 
 Render ではこのリポジトリの `render.yaml` を使えます。環境変数は Render のダッシュボードで設定してください。

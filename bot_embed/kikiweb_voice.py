@@ -33,6 +33,9 @@ FRAME_MS = 20
 BYTES_PER_SAMPLE = 2
 FRAME_BYTES = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_MS // 1000
 OPUS_SILENCE = b"\xf8\xff\xfe"
+STREAM_VOICE = 0
+STREAM_SOUNDBOARD = 1
+MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -242,11 +245,11 @@ class KikiWebVoiceRelay:
         self.listen_restart_task = None
         self.clear_audio_queue()
 
-    def enqueue_pcm(self, pcm: bytes) -> None:
+    def enqueue_pcm(self, pcm: bytes, *, stream_type: int = STREAM_VOICE) -> None:
         if not self.loop or self.closed.is_set():
             return
 
-        self.loop.call_soon_threadsafe(self._enqueue_pcm_in_loop, pcm)
+        self.loop.call_soon_threadsafe(self._enqueue_pcm_in_loop, pcm, stream_type)
 
     def clear_audio_queue(self) -> None:
         while True:
@@ -256,7 +259,7 @@ class KikiWebVoiceRelay:
             except asyncio.QueueEmpty:
                 break
 
-    def _enqueue_pcm_in_loop(self, pcm: bytes) -> None:
+    def _enqueue_pcm_in_loop(self, pcm: bytes, stream_type: int = STREAM_VOICE) -> None:
         for offset in range(0, len(pcm), FRAME_BYTES):
             frame = pcm[offset : offset + FRAME_BYTES]
             if len(frame) != FRAME_BYTES:
@@ -267,7 +270,64 @@ class KikiWebVoiceRelay:
                     self.queue.get_nowait()
                     self.queue.task_done()
 
-            self.queue.put_nowait(frame)
+            self.queue.put_nowait(bytes((stream_type,)) + frame)
+
+    async def play_soundboard(self, sound_url: str, volume: float = 1.0) -> None:
+        if self.closed.is_set() or not self.session or self.session.closed:
+            return
+
+        try:
+            async with self.session.get(sound_url, max_redirects=3) as response:
+                response.raise_for_status()
+                if response.content_length and response.content_length > MAX_SOUNDBOARD_BYTES:
+                    raise ValueError("Discord soundboard file is too large.")
+                sound_data = await response.read()
+                if len(sound_data) > MAX_SOUNDBOARD_BYTES:
+                    raise ValueError("Discord soundboard file is too large.")
+
+            normalized_volume = max(0.0, min(2.0, float(volume)))
+            if normalized_volume == 0:
+                normalized_volume = 1.0
+
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-t",
+                "10",
+                "-filter:a",
+                f"volume={normalized_volume:.3f}",
+                "-f",
+                "s16le",
+                "-ar",
+                str(SAMPLE_RATE),
+                "-ac",
+                str(CHANNELS),
+                "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            pcm, stderr = await process.communicate(sound_data)
+            if process.returncode != 0:
+                detail = stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(detail or f"ffmpeg exited with status {process.returncode}")
+
+            for offset in range(0, len(pcm), FRAME_BYTES):
+                frame = pcm[offset : offset + FRAME_BYTES]
+                if len(frame) != FRAME_BYTES or self.closed.is_set():
+                    break
+                self._enqueue_pcm_in_loop(frame, STREAM_SOUNDBOARD)
+                await asyncio.sleep(FRAME_MS / 1000)
+        except FileNotFoundError:
+            LOGGER.error("KikiWeb soundboard requires ffmpeg on the Discord Bot host.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("KikiWeb could not relay a Discord soundboard effect")
 
     def _after_listen(self, error: Optional[Exception]) -> None:
         if error:
@@ -408,6 +468,18 @@ class KikiWebRelayManager:
         self.relays.clear()
         await asyncio.gather(*(relay.disconnect() for relay in relays), return_exceptions=True)
 
+    async def play_soundboard_effect(self, effect: discord.VoiceChannelEffect) -> None:
+        if not effect.is_sound() or effect.sound is None:
+            return
+
+        relay = self.relays.get(effect.channel.guild.id)
+        if relay is None or relay.voice_client is None:
+            return
+        if getattr(relay.voice_client.channel, "id", None) != effect.channel.id:
+            return
+
+        await relay.play_soundboard(effect.sound.url, effect.sound.volume)
+
 
 def install_kikiweb_commands(
     bot,
@@ -431,5 +503,9 @@ def install_kikiweb_commands(
     async def kikiweb_leave(ctx):
         await manager.disconnect(ctx.guild.id)
         await ctx.reply("KikiWeb への音声中継を停止しました。")
+
+    @bot.listen("on_voice_channel_effect")
+    async def kikiweb_soundboard(effect):
+        await manager.play_soundboard_effect(effect)
 
     return manager

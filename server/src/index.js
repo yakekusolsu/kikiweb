@@ -1,8 +1,10 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { AudioMixer, CHANNELS, SAMPLE_RATE } from './audioMixer.js';
+import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
 import { config } from './config.js';
 
+const STREAM_VOICE = 0;
+const STREAM_SOUNDBOARD = 1;
 const streams = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
@@ -58,7 +60,12 @@ const publicStatus = () => {
       (total, stream) => total + stream.mixer.activeSpeakerCount(),
       0,
     ),
-    lastAudioAt: Math.max(0, ...activeStreams.map((stream) => stream.mixer.getLastAudioAt())),
+    lastAudioAt: Math.max(
+      0,
+      ...activeStreams.map((stream) =>
+        Math.max(stream.mixer.getLastAudioAt(), stream.soundboardMixer.getLastAudioAt()),
+      ),
+    ),
     discord: {
       state: activeStreams.length > 0 ? 'ready' : 'waiting-for-bot',
       error: '',
@@ -89,7 +96,7 @@ const publicStreamStatus = (stream) => ({
   activeSpeakers: stream.mixer.activeSpeakerCount(),
   memberCount: stream.memberCount,
   mutedCount: stream.mutedCount,
-  lastAudioAt: stream.mixer.getLastAudioAt(),
+  lastAudioAt: Math.max(stream.mixer.getLastAudioAt(), stream.soundboardMixer.getLastAudioAt()),
   lastIngestAt: stream.lastIngestAt,
 });
 
@@ -118,7 +125,8 @@ const streamFromIngestUrl = (url) => {
       lastIngestAt: 0,
       memberCount: 0,
       mutedCount: 0,
-      mixer: new AudioMixer(),
+      mixer: new AudioMixer(STREAM_VOICE),
+      soundboardMixer: new AudioMixer(STREAM_SOUNDBOARD),
     };
     streams.set(id, stream);
   } else {
@@ -200,13 +208,29 @@ wss.on('connection', (ws, _request, url) => {
       }
 
       if (!Buffer.isBuffer(message)) return;
+      let streamType = STREAM_VOICE;
+      let pcm = message;
+      if (
+        message.length === PCM_FRAME_BYTES + 1 &&
+        (message[0] === STREAM_VOICE || message[0] === STREAM_SOUNDBOARD)
+      ) {
+        streamType = message[0];
+        pcm = message.subarray(1);
+      }
+      if (pcm.length === 0 || pcm.length % PCM_FRAME_BYTES !== 0) return;
+
       stream.lastIngestAt = Date.now();
-      stream.mixer.feed('python-bot', message);
+      if (streamType === STREAM_SOUNDBOARD) {
+        stream.soundboardMixer.feed('discord-soundboard', pcm);
+      } else {
+        stream.mixer.feed('python-bot', pcm);
+      }
     });
     ws.on('close', () => {
       if (stream.ingestClient === ws) {
         stream.ingestClient = null;
         stream.mixer.removeInput('python-bot');
+        stream.soundboardMixer.removeInput('discord-soundboard');
       }
     });
     ws.send(
@@ -228,6 +252,7 @@ wss.on('connection', (ws, _request, url) => {
     }
 
     stream.mixer.addClient(ws);
+    stream.soundboardMixer.addClient(ws);
     ws.send(
       JSON.stringify({
         type: 'hello',
@@ -250,6 +275,7 @@ const shutdown = async () => {
   for (const stream of streams.values()) {
     stream.ingestClient?.close();
     stream.mixer.close();
+    stream.soundboardMixer.close();
   }
   streams.clear();
   server.close(() => process.exit(0));

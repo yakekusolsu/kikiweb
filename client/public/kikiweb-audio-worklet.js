@@ -31,6 +31,14 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 
       if (message.type === "volume") {
         this.volume = Math.max(0, Math.min(1, Number(message.value) || 0));
+        return;
+      }
+
+      if (message.type === "reset") {
+        this.buffers = [];
+        this.readIndex = 0;
+        this.queuedSamples = 0;
+        this.started = false;
       }
     };
   }

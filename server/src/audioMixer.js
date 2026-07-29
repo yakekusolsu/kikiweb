@@ -8,7 +8,8 @@ export class AudioMixer {
   clients = new Set();
   lastAudioAt = 0;
 
-  constructor() {
+  constructor(streamType = 0) {
+    this.streamType = streamType;
     this.timer = setInterval(() => this.mixAndBroadcast(), 20);
     this.timer.unref();
   }
@@ -101,9 +102,12 @@ export class AudioMixer {
     }
 
     this.lastAudioAt = Date.now();
+    const packet = Buffer.allocUnsafe(PCM_FRAME_BYTES + 1);
+    packet[0] = this.streamType;
+    mixed.copy(packet, 1);
     for (const client of this.clients) {
       if (client.readyState === client.OPEN) {
-        client.send(mixed, { binary: true });
+        client.send(packet, { binary: true });
       }
     }
   }

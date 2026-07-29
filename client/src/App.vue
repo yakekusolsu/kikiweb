@@ -43,12 +43,14 @@ const playerError = ref('');
 const volume = ref(85);
 const bufferMs = ref(0);
 const underruns = ref(0);
+const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') !== 'off');
 const selectedServerId = ref(window.localStorage.getItem('kikiweb-server-id') || '');
 const route = ref(window.location.hash || '#/');
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
+let soundboardWorkletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
@@ -124,19 +126,26 @@ const startListening = async () => {
       throw new Error(`48kHz 再生に対応していません。現在のサンプルレート: ${audioContext.sampleRate}Hz`);
     }
 
-    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=2');
+    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=3');
     workletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
     });
+    soundboardWorkletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+    });
     workletNode.port.postMessage({ type: 'volume', value: volume.value / 100 });
+    soundboardWorkletNode.port.postMessage({ type: 'volume', value: volume.value / 100 });
     workletNode.port.onmessage = (event) => {
       if (event.data?.type !== 'stats') return;
       bufferMs.value = event.data.bufferMs;
       underruns.value = event.data.underruns;
     };
     workletNode.connect(audioContext.destination);
+    soundboardWorkletNode.connect(audioContext.destination);
     await audioContext.resume();
 
     const nextSocket = new WebSocket(wsUrl.value);
@@ -151,12 +160,20 @@ const startListening = async () => {
     nextSocket.onmessage = async (event) => {
       if (socket !== nextSocket) return;
       if (typeof event.data === 'string') return;
-      workletNode?.port.postMessage(
+
+      const packet = event.data as ArrayBuffer;
+      const tagged = packet.byteLength === 3_841;
+      const streamType = tagged ? new Uint8Array(packet, 0, 1)[0] : 0;
+      const pcm = tagged ? packet.slice(1) : packet;
+      if (streamType === 1 && !soundboardEnabled.value) return;
+
+      const targetNode = streamType === 1 ? soundboardWorkletNode : workletNode;
+      targetNode?.port.postMessage(
         {
           type: 'pcm',
-          buffer: event.data,
+          buffer: pcm,
         },
-        [event.data],
+        [pcm],
       );
     };
 
@@ -190,6 +207,9 @@ const stopListening = () => {
   workletNode?.disconnect();
   workletNode?.port.close();
   workletNode = null;
+  soundboardWorkletNode?.disconnect();
+  soundboardWorkletNode?.port.close();
+  soundboardWorkletNode = null;
   void audioContext?.close();
   audioContext = null;
   bufferMs.value = 0;
@@ -209,6 +229,14 @@ window.addEventListener('hashchange', syncRoute);
 
 watch(volume, (value) => {
   workletNode?.port.postMessage({ type: 'volume', value: value / 100 });
+  soundboardWorkletNode?.port.postMessage({ type: 'volume', value: value / 100 });
+});
+
+watch(soundboardEnabled, (enabled) => {
+  window.localStorage.setItem('kikiweb-soundboard', enabled ? 'on' : 'off');
+  if (!enabled) {
+    soundboardWorkletNode?.port.postMessage({ type: 'reset' });
+  }
 });
 
 watch(selectedServerId, (value, previousValue) => {
@@ -333,6 +361,12 @@ onBeforeUnmount(() => {
       <label class="field">
         <span>音量</span>
         <input v-model="volume" min="0" max="100" type="range" />
+      </label>
+
+      <label class="soundboard-toggle">
+        <span>サウンドボード</span>
+        <input v-model="soundboardEnabled" type="checkbox" role="switch" />
+        <strong>{{ soundboardEnabled ? 'ON' : 'OFF' }}</strong>
       </label>
 
       <div class="audio-meter" aria-live="polite">
