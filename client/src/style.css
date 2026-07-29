@@ -326,6 +326,25 @@ h2 {
   accent-color: #c8523b;
 }
 
+.audio-meter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  color: #61706f;
+  font-size: 0.88rem;
+}
+
+.audio-meter span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dfe5e1;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: #fbfcfa;
+}
+
 .deploy-notes {
   display: grid;
   gap: 12px;

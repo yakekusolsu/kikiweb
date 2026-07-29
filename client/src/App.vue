@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
 type ApiStatus = {
   listeners: number;
@@ -26,11 +26,13 @@ const statusError = ref('');
 const playerState = ref<'idle' | 'connecting' | 'playing' | 'stopped' | 'error'>('idle');
 const playerError = ref('');
 const volume = ref(85);
+const bufferMs = ref(0);
+const underruns = ref(0);
 const route = ref(window.location.hash || '#/');
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
-let nextPlayTime = 0;
+let workletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
@@ -71,46 +73,38 @@ const fetchStatus = async () => {
   }
 };
 
-const playPcmFrame = async (data: ArrayBuffer) => {
-  if (!audioContext) return;
-  if (audioContext.state === 'suspended') {
-    await audioContext.resume();
-  }
-
-  const input = new Int16Array(data);
-  const channels = 2;
-  const frameCount = input.length / channels;
-  const audioBuffer = audioContext.createBuffer(channels, frameCount, 48_000);
-  const gain = volume.value / 100;
-
-  for (let channel = 0; channel < channels; channel += 1) {
-    const output = audioBuffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i += 1) {
-      output[i] = (input[i * channels + channel] / 32768) * gain;
-    }
-  }
-
-  const source = audioContext.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(audioContext.destination);
-
-  const now = audioContext.currentTime;
-  if (nextPlayTime < now + 0.04) {
-    nextPlayTime = now + 0.08;
-  }
-
-  source.start(nextPlayTime);
-  nextPlayTime += audioBuffer.duration;
-};
-
 const startListening = async () => {
   stopListening();
   playerState.value = 'connecting';
   playerError.value = '';
+  bufferMs.value = 0;
+  underruns.value = 0;
 
   try {
+    if (!('AudioWorkletNode' in window)) {
+      throw new Error('このブラウザは AudioWorklet に対応していません。');
+    }
+
     audioContext = new AudioContext({ sampleRate: 48_000 });
+    if (audioContext.sampleRate !== 48_000) {
+      throw new Error(`48kHz 再生に対応していません。現在のサンプルレート: ${audioContext.sampleRate}Hz`);
+    }
+
+    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js');
+    workletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+    });
+    workletNode.port.postMessage({ type: 'volume', value: volume.value / 100 });
+    workletNode.port.onmessage = (event) => {
+      if (event.data?.type !== 'stats') return;
+      bufferMs.value = event.data.bufferMs;
+      underruns.value = event.data.underruns;
+    };
+    workletNode.connect(audioContext.destination);
     await audioContext.resume();
+
     socket = new WebSocket(wsUrl.value);
     socket.binaryType = 'arraybuffer';
 
@@ -120,7 +114,13 @@ const startListening = async () => {
 
     socket.onmessage = async (event) => {
       if (typeof event.data === 'string') return;
-      await playPcmFrame(event.data);
+      workletNode?.port.postMessage(
+        {
+          type: 'pcm',
+          buffer: event.data,
+        },
+        [event.data],
+      );
     };
 
     socket.onerror = () => {
@@ -142,9 +142,12 @@ const startListening = async () => {
 const stopListening = () => {
   socket?.close();
   socket = null;
+  workletNode?.disconnect();
+  workletNode?.port.close();
+  workletNode = null;
   void audioContext?.close();
   audioContext = null;
-  nextPlayTime = 0;
+  bufferMs.value = 0;
   if (playerState.value !== 'idle') {
     playerState.value = 'stopped';
   }
@@ -158,6 +161,10 @@ const syncRoute = () => {
 fetchStatus();
 statusTimer = window.setInterval(fetchStatus, 5_000);
 window.addEventListener('hashchange', syncRoute);
+
+watch(volume, (value) => {
+  workletNode?.port.postMessage({ type: 'volume', value: value / 100 });
+});
 
 onBeforeUnmount(() => {
   stopListening();
@@ -227,6 +234,11 @@ onBeforeUnmount(() => {
         <span>音量</span>
         <input v-model="volume" min="0" max="100" type="range" />
       </label>
+
+      <div class="audio-meter" aria-live="polite">
+        <span>Buffer {{ bufferMs }}ms</span>
+        <span>Underruns {{ underruns }}</span>
+      </div>
 
       <p v-if="playerError" class="error">{{ playerError }}</p>
       <p v-if="statusError" class="error">Status API: {{ statusError }}</p>
