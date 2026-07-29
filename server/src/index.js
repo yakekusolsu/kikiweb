@@ -209,28 +209,34 @@ wss.on('connection', (ws, _request, url) => {
 
       if (!Buffer.isBuffer(message)) return;
       let streamType = STREAM_VOICE;
+      let sourceId = 'python-bot';
       let pcm = message;
-      if (
+      if (message.length === PCM_FRAME_BYTES + 9 && message[0] === STREAM_SOUNDBOARD) {
+        streamType = STREAM_SOUNDBOARD;
+        sourceId = `soundboard-${message.readBigUInt64BE(1)}`;
+        pcm = message.subarray(9);
+      } else if (
         message.length === PCM_FRAME_BYTES + 1 &&
         (message[0] === STREAM_VOICE || message[0] === STREAM_SOUNDBOARD)
       ) {
         streamType = message[0];
+        sourceId = streamType === STREAM_SOUNDBOARD ? 'discord-soundboard' : 'python-bot';
         pcm = message.subarray(1);
       }
       if (pcm.length === 0 || pcm.length % PCM_FRAME_BYTES !== 0) return;
 
       stream.lastIngestAt = Date.now();
       if (streamType === STREAM_SOUNDBOARD) {
-        stream.soundboardMixer.feed('discord-soundboard', pcm);
+        stream.soundboardMixer.feed(sourceId, pcm);
       } else {
-        stream.mixer.feed('python-bot', pcm);
+        stream.mixer.feed(sourceId, pcm);
       }
     });
     ws.on('close', () => {
       if (stream.ingestClient === ws) {
         stream.ingestClient = null;
         stream.mixer.removeInput('python-bot');
-        stream.soundboardMixer.removeInput('discord-soundboard');
+        stream.soundboardMixer.clearInputs();
       }
     });
     ws.send(

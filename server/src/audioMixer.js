@@ -48,6 +48,10 @@ export class AudioMixer {
     this.buffers.delete(userId);
   }
 
+  clearInputs() {
+    this.buffers.clear();
+  }
+
   heartbeat() {
     for (const client of this.clients) {
       if (client.isAlive === false) {
@@ -89,7 +93,8 @@ export class AudioMixer {
     if (frames.length === 0) return;
 
     const mixed = Buffer.allocUnsafe(PCM_FRAME_BYTES);
-    const divisor = Math.max(1, Math.sqrt(frames.length));
+    const divisor =
+      this.streamType === 1 ? Math.max(1, frames.length) : Math.max(1, Math.sqrt(frames.length));
 
     for (let offset = 0; offset < PCM_FRAME_BYTES; offset += 2) {
       let sample = 0;

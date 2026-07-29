@@ -162,9 +162,11 @@ const startListening = async () => {
       if (typeof event.data === 'string') return;
 
       const packet = event.data as ArrayBuffer;
-      const tagged = packet.byteLength === 3_841;
-      const streamType = tagged ? new Uint8Array(packet, 0, 1)[0] : 0;
-      const pcm = tagged ? packet.slice(1) : packet;
+      const firstByte = new Uint8Array(packet, 0, 1)[0];
+      const extendedSoundboard = packet.byteLength === 3_849 && firstByte === 1;
+      const tagged = packet.byteLength === 3_841 && (firstByte === 0 || firstByte === 1);
+      const streamType = extendedSoundboard || tagged ? firstByte : 0;
+      const pcm = extendedSoundboard ? packet.slice(9) : tagged ? packet.slice(1) : packet;
       if (streamType === 1 && !soundboardEnabled.value) return;
 
       const targetNode = streamType === 1 ? soundboardWorkletNode : workletNode;

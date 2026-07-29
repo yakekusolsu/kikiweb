@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -246,11 +247,17 @@ class KikiWebVoiceRelay:
         self.listen_restart_task = None
         self.clear_audio_queue()
 
-    def enqueue_pcm(self, pcm: bytes, *, stream_type: int = STREAM_VOICE) -> None:
+    def enqueue_pcm(
+        self,
+        pcm: bytes,
+        *,
+        stream_type: int = STREAM_VOICE,
+        source_id: int = 0,
+    ) -> None:
         if not self.loop or self.closed.is_set():
             return
 
-        self.loop.call_soon_threadsafe(self._enqueue_pcm_in_loop, pcm, stream_type)
+        self.loop.call_soon_threadsafe(self._enqueue_pcm_in_loop, pcm, stream_type, source_id)
 
     def clear_audio_queue(self) -> None:
         while True:
@@ -260,7 +267,17 @@ class KikiWebVoiceRelay:
             except asyncio.QueueEmpty:
                 break
 
-    def _enqueue_pcm_in_loop(self, pcm: bytes, stream_type: int = STREAM_VOICE) -> None:
+    def _enqueue_pcm_in_loop(
+        self,
+        pcm: bytes,
+        stream_type: int = STREAM_VOICE,
+        source_id: int = 0,
+    ) -> None:
+        if stream_type == STREAM_SOUNDBOARD:
+            header = bytes((STREAM_SOUNDBOARD,)) + source_id.to_bytes(8, "big", signed=False)
+        else:
+            header = bytes((STREAM_VOICE,))
+
         for offset in range(0, len(pcm), FRAME_BYTES):
             frame = pcm[offset : offset + FRAME_BYTES]
             if len(frame) != FRAME_BYTES:
@@ -271,7 +288,7 @@ class KikiWebVoiceRelay:
                     self.queue.get_nowait()
                     self.queue.task_done()
 
-            self.queue.put_nowait(bytes((stream_type,)) + frame)
+            self.queue.put_nowait(header + frame)
 
     async def play_soundboard(self, sound_url: str, volume: float = 1.0) -> None:
         if self.closed.is_set() or not self.session or self.session.closed:
@@ -317,11 +334,12 @@ class KikiWebVoiceRelay:
                 detail = stderr.decode("utf-8", errors="replace").strip()
                 raise RuntimeError(detail or f"ffmpeg exited with status {process.returncode}")
 
+            source_id = secrets.randbits(64)
             for offset in range(0, len(pcm), FRAME_BYTES):
                 frame = pcm[offset : offset + FRAME_BYTES]
                 if len(frame) != FRAME_BYTES or self.closed.is_set():
                     break
-                self._enqueue_pcm_in_loop(frame, STREAM_SOUNDBOARD)
+                self._enqueue_pcm_in_loop(frame, STREAM_SOUNDBOARD, source_id)
                 await asyncio.sleep(FRAME_MS / 1000)
         except FileNotFoundError:
             LOGGER.error("KikiWeb soundboard requires ffmpeg on the Discord Bot host.")
