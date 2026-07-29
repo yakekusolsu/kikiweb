@@ -312,7 +312,16 @@ class KikiWebVoiceRelay:
                     await asyncio.sleep(self.config.reconnect_delay)
                     continue
 
-                LOGGER.info("Connecting to KikiWeb relay: %s", self.config.relay_url)
+                if not self.server_id or not self.server_name or not self.channel_id or not self.channel_name:
+                    raise RuntimeError("Discord server and voice channel metadata are not available.")
+
+                LOGGER.info(
+                    "Connecting to KikiWeb relay: server=%s (%s), channel=%s (%s)",
+                    self.server_name,
+                    self.server_id,
+                    self.channel_name,
+                    self.channel_id,
+                )
                 async with self.session.ws_connect(
                     self.config.websocket_url(
                         server_id=self.server_id,
@@ -335,6 +344,14 @@ class KikiWebVoiceRelay:
                             await socket.send_bytes(frame)
                         finally:
                             self.queue.task_done()
+
+                    if not self.closed.is_set():
+                        LOGGER.warning(
+                            "KikiWeb relay disconnected: code=%s, reason=%s",
+                            socket.close_code,
+                            socket.exception() or "server closed the connection",
+                        )
+                        await asyncio.sleep(self.config.reconnect_delay)
             except asyncio.CancelledError:
                 raise
             except Exception:

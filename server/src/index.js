@@ -94,23 +94,30 @@ const safeLabel = (value, fallback) => {
 };
 
 const streamFromIngestUrl = (url) => {
-  const id = safeLabel(url.searchParams.get('serverId'), 'default');
+  const id = safeLabel(url.searchParams.get('serverId'), '');
+  const name = safeLabel(url.searchParams.get('serverName'), '');
+  const channelId = safeLabel(url.searchParams.get('channelId'), '');
+  const channelName = safeLabel(url.searchParams.get('channelName'), '');
+  if (!id || !name || !channelId || !channelName) {
+    return null;
+  }
+
   let stream = streams.get(id);
   if (!stream) {
     stream = {
       id,
-      name: safeLabel(url.searchParams.get('serverName'), `Discord ${id}`),
-      channelId: safeLabel(url.searchParams.get('channelId'), ''),
-      channelName: safeLabel(url.searchParams.get('channelName'), 'Voice channel'),
+      name,
+      channelId,
+      channelName,
       ingestClient: null,
       lastIngestAt: 0,
       mixer: new AudioMixer(),
     };
     streams.set(id, stream);
   } else {
-    stream.name = safeLabel(url.searchParams.get('serverName'), stream.name);
-    stream.channelId = safeLabel(url.searchParams.get('channelId'), stream.channelId);
-    stream.channelName = safeLabel(url.searchParams.get('channelName'), stream.channelName);
+    stream.name = name;
+    stream.channelId = channelId;
+    stream.channelName = channelName;
   }
   return stream;
 };
@@ -148,6 +155,11 @@ server.on('upgrade', (request, socket, head) => {
 wss.on('connection', (ws, _request, url) => {
   if (url.pathname === '/ingest') {
     const stream = streamFromIngestUrl(url);
+    if (!stream) {
+      ws.close(1008, 'Discord server metadata is required. Update kikiweb_voice.py.');
+      return;
+    }
+
     if (stream.ingestClient) {
       stream.ingestClient.close(1012, 'Another ingest client connected for this server.');
     }
