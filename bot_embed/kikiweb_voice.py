@@ -41,7 +41,7 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         super().__init__()
         self.relay = relay
         self.decoders: dict[int, opus.Decoder] = {}
-        self.muted_frames: dict[int, int] = {}
+        self.pcm_remainders: dict[int, bytes] = {}
 
     def wants_opus(self) -> bool:
         return True
@@ -50,35 +50,41 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         if user is not None and getattr(user, "bot", False):
             return
 
+        decoder_key = user.id if user is not None else 0
         pcm = None
         opus_packet = getattr(data, "opus", None)
         if opus_packet:
-            decoder_key = user.id if user is not None else 0
             decoder = self.decoders.setdefault(decoder_key, opus.Decoder())
             try:
                 pcm = decoder.decode(opus_packet, fec=False)
             except opus.OpusError:
                 self.decoders[decoder_key] = opus.Decoder()
-                self.muted_frames[decoder_key] = 8
+                self.pcm_remainders.pop(decoder_key, None)
                 LOGGER.warning("KikiWeb skipped a corrupted Discord voice packet and reset that speaker decoder.")
-                return
-
-            muted = self.muted_frames.get(decoder_key, 0)
-            if muted > 0:
-                self.muted_frames[decoder_key] = muted - 1
                 return
 
         if pcm is None:
             pcm = getattr(data, "pcm", None)
 
-        if not pcm or len(pcm) != FRAME_BYTES:
+        if not pcm:
             return
 
-        self.relay.enqueue_pcm(bytes(pcm))
+        buffered_pcm = self.pcm_remainders.get(decoder_key, b"") + bytes(pcm)
+        complete_bytes = len(buffered_pcm) - (len(buffered_pcm) % FRAME_BYTES)
+        if complete_bytes == 0:
+            self.pcm_remainders[decoder_key] = buffered_pcm
+            return
+
+        self.relay.enqueue_pcm(buffered_pcm[:complete_bytes])
+        remainder = buffered_pcm[complete_bytes:]
+        if remainder:
+            self.pcm_remainders[decoder_key] = remainder
+        else:
+            self.pcm_remainders.pop(decoder_key, None)
 
     def cleanup(self) -> None:
         self.decoders.clear()
-        self.muted_frames.clear()
+        self.pcm_remainders.clear()
         self.relay.clear_audio_queue()
 
 
