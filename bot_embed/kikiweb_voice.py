@@ -8,6 +8,7 @@ from typing import Optional
 
 import aiohttp
 import discord
+from discord import opus
 from discord.ext import voice_recv
 
 LOGGER = logging.getLogger(__name__)
@@ -39,21 +40,36 @@ class KikiWebAudioSink(voice_recv.AudioSink):
     def __init__(self, relay: "KikiWebVoiceRelay") -> None:
         super().__init__()
         self.relay = relay
+        self.decoders: dict[int, opus.Decoder] = {}
 
     def wants_opus(self) -> bool:
-        return False
+        return True
 
     def write(self, user: Optional[discord.abc.User], data: voice_recv.VoiceData) -> None:
         if user is not None and getattr(user, "bot", False):
             return
 
-        pcm = getattr(data, "pcm", None)
+        pcm = None
+        opus_packet = getattr(data, "opus", None)
+        if opus_packet:
+            decoder_key = user.id if user is not None else 0
+            decoder = self.decoders.setdefault(decoder_key, opus.Decoder())
+            try:
+                pcm = decoder.decode(opus_packet, fec=False)
+            except opus.OpusError:
+                LOGGER.warning("KikiWeb skipped a corrupted Discord voice packet.")
+                return
+
+        if pcm is None:
+            pcm = getattr(data, "pcm", None)
+
         if not pcm:
             return
 
         self.relay.enqueue_pcm(bytes(pcm))
 
     def cleanup(self) -> None:
+        self.decoders.clear()
         self.relay.clear_audio_queue()
 
 
