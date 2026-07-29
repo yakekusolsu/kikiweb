@@ -33,6 +33,7 @@ const route = ref(window.location.hash || '#/');
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
+let compressorNode: DynamicsCompressorNode | null = null;
 let statusTimer: number | undefined;
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
@@ -102,7 +103,14 @@ const startListening = async () => {
       bufferMs.value = event.data.bufferMs;
       underruns.value = event.data.underruns;
     };
-    workletNode.connect(audioContext.destination);
+
+    compressorNode = audioContext.createDynamicsCompressor();
+    compressorNode.threshold.value = -8;
+    compressorNode.knee.value = 4;
+    compressorNode.ratio.value = 8;
+    compressorNode.attack.value = 0.002;
+    compressorNode.release.value = 0.18;
+    workletNode.connect(compressorNode).connect(audioContext.destination);
     await audioContext.resume();
 
     socket = new WebSocket(wsUrl.value);
@@ -145,6 +153,8 @@ const stopListening = () => {
   workletNode?.disconnect();
   workletNode?.port.close();
   workletNode = null;
+  compressorNode?.disconnect();
+  compressorNode = null;
   void audioContext?.close();
   audioContext = null;
   bufferMs.value = 0;
