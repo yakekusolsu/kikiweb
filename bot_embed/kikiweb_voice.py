@@ -12,9 +12,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import aiohttp
 import davey
 import discord
-import imageio_ffmpeg
 from discord.ext import voice_recv
 from discord.ext.voice_recv.reader import AudioReader
+
+try:
+    import imageio_ffmpeg
+except ImportError:
+    imageio_ffmpeg = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -307,8 +311,9 @@ class KikiWebVoiceRelay:
             if normalized_volume == 0:
                 normalized_volume = 1.0
 
+            ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe() if imageio_ffmpeg else "ffmpeg"
             process = await asyncio.create_subprocess_exec(
-                imageio_ffmpeg.get_ffmpeg_exe(),
+                ffmpeg_executable,
                 "-hide_banner",
                 "-loglevel",
                 "error",
