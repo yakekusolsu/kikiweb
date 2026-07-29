@@ -155,7 +155,11 @@ class KikiWebVoiceRelay:
 
     def _after_listen(self, error: Optional[Exception]) -> None:
         if error:
-            LOGGER.exception("KikiWeb voice receive stopped with an error", exc_info=error)
+            message = str(error).lower()
+            if "corrupted stream" in message:
+                LOGGER.warning("KikiWeb ignored a corrupted Discord voice packet and restarted the receiver.")
+            else:
+                LOGGER.exception("KikiWeb voice receive stopped with an error", exc_info=error)
         if self.loop and not self.closed.is_set():
             self.loop.call_soon_threadsafe(self._schedule_listen_restart)
 
