@@ -11,8 +11,6 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
     this.prebufferSamples = Math.round(sampleRate * 0.12);
     this.resumeBufferSamples = Math.round(sampleRate * 0.08);
     this.maxQueuedSamples = Math.round(sampleRate * 1.2);
-    this.lastInput = [0, 0];
-    this.lastOutput = [0, 0];
 
     this.port.onmessage = (event) => {
       const message = event.data;
@@ -64,8 +62,8 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
       }
 
       const buffer = this.buffers[0];
-      left[i] = this.conditionSample(buffer[this.readIndex] / 32768, 0);
-      right[i] = this.conditionSample(buffer[this.readIndex + 1] / 32768, 1);
+      left[i] = (buffer[this.readIndex] / 32768) * this.volume;
+      right[i] = (buffer[this.readIndex + 1] / 32768) * this.volume;
       this.readIndex += 2;
       this.queuedSamples -= 1;
 
@@ -93,15 +91,6 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
       bufferMs: Math.round((this.queuedSamples / sampleRate) * 1000),
       underruns: this.underruns,
     });
-  }
-
-  conditionSample(sample, channel) {
-    const highPassed = sample - this.lastInput[channel] + 0.995 * this.lastOutput[channel];
-    this.lastInput[channel] = sample;
-    this.lastOutput[channel] = highPassed;
-
-    const driven = highPassed * this.volume;
-    return Math.tanh(driven * 1.2) / 1.2;
   }
 }
 

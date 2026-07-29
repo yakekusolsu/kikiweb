@@ -90,7 +90,7 @@ const startListening = async () => {
       throw new Error(`48kHz 再生に対応していません。現在のサンプルレート: ${audioContext.sampleRate}Hz`);
     }
 
-    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js');
+    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=2');
     workletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
