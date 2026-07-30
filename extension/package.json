@@ -1,0 +1,22 @@
+{
+  "name": "kikiweb-chrome-extension",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build"
+  },
+  "dependencies": {
+    "@lucide/vue": "1.28.0",
+    "vue": "3.5.13"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.287",
+    "@types/node": "22.10.2",
+    "@vitejs/plugin-vue": "5.2.4",
+    "typescript": "5.6.3",
+    "vite": "5.4.21",
+    "vue-tsc": "2.2.12"
+  }
+}

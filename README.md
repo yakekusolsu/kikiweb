@@ -6,6 +6,7 @@ Discord サーバーを同時に中継し、Web のサーバーメニューか�
 - `client`: Vue.js + Vite。Vercel にデプロイします。
 - `server`: Node.js + WebSocket の音声 relay。Render にデプロイします。
 - `bot_embed`: 既存 Python Bot に埋め込む KikiWeb 送信用コードです。
+- `extension`: Vue.js + Manifest V3 の Google Chrome サイドパネル拡張です。
 
 ## ローカル起動
 
@@ -84,6 +85,31 @@ Vercel の Project Root は `client` にしてください。
 
 - `VITE_API_BASE_URL`: Render の URL。例: `https://kikiweb-api.onrender.com`
 - `VITE_LISTEN_TOKEN`: Render 側で `LISTEN_TOKEN` を設定した場合のみ同じ値
+
+## Google Chrome 拡張機能
+
+Chrome 116 以降で、KikiWeb をサイドパネルから利用できます。サーバー選択、通常音声とサウンドボードの
+再生、音量変更、VC の参加状態確認、Discord Bot の招待に対応しています。
+
+```bash
+npm install --prefix extension
+npm run build:extension
+```
+
+ビルド後、Chrome で次の手順を行います。
+
+1. `chrome://extensions` を開き、「デベロッパー モード」を有効にします。
+2. 「パッケージ化されていない拡張機能を読み込む」を押します。
+3. このリポジトリの `extension/dist` フォルダを選びます。
+4. Chrome ツールバーの KikiWeb アイコンを押すとサイドパネルが開きます。
+
+既定の relay は `https://kikiweb.onrender.com`、Web サイトは
+`https://kikiweb-seven.vercel.app` です。別の URL や `LISTEN_TOKEN` を使う場合は
+`extension/.env.example` を `extension/.env.local` にコピーして値を変更し、再ビルドしてください。
+relay のドメインを変更するときは `extension/public/manifest.json` の `host_permissions` にも
+そのドメインを追加します。
+
+サイドパネルを閉じると音声再生も停止します。
 
 ## 注意
 
