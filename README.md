@@ -89,7 +89,7 @@ Vercel の Project Root は `client` にしてください。
 ## Google Chrome 拡張機能
 
 Chrome 116 以降で、KikiWeb をサイドパネルから利用できます。サーバー選択、通常音声とサウンドボードの
-再生、音量変更、VC の参加状態確認、Discord Bot の招待に対応しています。
+再生、音量変更、VC の参加状態確認、ダークモード、Discord Bot の招待に対応しています。
 
 ```bash
 npm install --prefix extension

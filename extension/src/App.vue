@@ -4,14 +4,17 @@ import {
   ExternalLink,
   Headphones,
   Mic2,
+  Moon,
   Play,
   RefreshCw,
   Square,
+  Sun,
   Users,
   Volume2,
   VolumeX,
 } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { getInitialTheme, saveTheme, type Theme } from './theme';
 
 type ServerStatus = {
   id: string;
@@ -49,6 +52,7 @@ const selectedServerId = ref(window.localStorage.getItem('kikiweb-extension-serv
 const bufferMs = ref(0);
 const underruns = ref(0);
 const refreshing = ref(false);
+const theme = ref<Theme>(getInitialTheme());
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
@@ -67,6 +71,9 @@ const stateLabel = computed(() => {
   if (playerState.value === 'error') return 'エラー';
   return selectedServer.value?.state === 'ready' ? '再生できます' : 'Bot待機中';
 });
+const themeButtonLabel = computed(() =>
+  theme.value === 'dark' ? 'ライトモードに切り替える' : 'ダークモードに切り替える',
+);
 const websocketUrl = computed(() => {
   const url = new URL(API_BASE_URL);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -96,6 +103,10 @@ const fetchStatus = async () => {
   } finally {
     refreshing.value = false;
   }
+};
+
+const toggleTheme = () => {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark';
 };
 
 const stopListening = () => {
@@ -224,6 +235,8 @@ watch(selectedServerId, (value, previousValue) => {
   if (previousValue && value !== previousValue && isPlaying.value) void startListening();
 });
 
+watch(theme, saveTheme);
+
 onBeforeUnmount(() => {
   stopListening();
   if (statusTimer) window.clearInterval(statusTimer);
@@ -240,16 +253,29 @@ onBeforeUnmount(() => {
           <small>Chrome Side Panel</small>
         </span>
       </a>
-      <button
-        class="icon-button"
-        type="button"
-        title="状態を更新"
-        aria-label="状態を更新"
-        :disabled="refreshing"
-        @click="fetchStatus"
-      >
-        <RefreshCw :class="{ spinning: refreshing }" :size="18" />
-      </button>
+      <div class="header-actions">
+        <button
+          class="icon-button"
+          type="button"
+          :title="themeButtonLabel"
+          :aria-label="themeButtonLabel"
+          :aria-pressed="theme === 'dark'"
+          @click="toggleTheme"
+        >
+          <Sun v-if="theme === 'dark'" :size="18" />
+          <Moon v-else :size="18" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          title="状態を更新"
+          aria-label="状態を更新"
+          :disabled="refreshing"
+          @click="fetchStatus"
+        >
+          <RefreshCw :class="{ spinning: refreshing }" :size="18" />
+        </button>
+      </div>
     </header>
 
     <section class="server-section" aria-labelledby="server-heading">

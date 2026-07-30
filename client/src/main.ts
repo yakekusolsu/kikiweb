@@ -1,5 +1,7 @@
-import { createApp } from 'vue'
-import './style.css'
-import App from './App.vue'
+import { createApp } from 'vue';
+import App from './App.vue';
+import './style.css';
+import { applyTheme, getInitialTheme } from './theme';
 
-createApp(App).mount('#app')
+applyTheme(getInitialTheme());
+createApp(App).mount('#app');

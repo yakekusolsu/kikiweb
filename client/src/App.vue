@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { Moon, Sun } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { getInitialTheme, saveTheme, type Theme } from './theme';
 
 type ServerStatus = {
   id: string;
@@ -46,6 +48,7 @@ const underruns = ref(0);
 const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') !== 'off');
 const selectedServerId = ref(window.localStorage.getItem('kikiweb-server-id') || '');
 const route = ref(window.location.hash || '#/');
+const theme = ref<Theme>(getInitialTheme());
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
@@ -73,6 +76,13 @@ const stateLabel = computed(() => {
   if (state === 'disconnected') return '切断';
   return '未確認';
 });
+const themeButtonLabel = computed(() =>
+  theme.value === 'dark' ? 'ライトモードに切り替える' : 'ダークモードに切り替える',
+);
+
+const toggleTheme = () => {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark';
+};
 
 const wsUrl = computed(() => {
   const url = new URL(normalizedApiUrl.value);
@@ -262,6 +272,8 @@ watch(selectedServerId, (value, previousValue) => {
   }
 });
 
+watch(theme, saveTheme);
+
 onBeforeUnmount(() => {
   stopListening();
   if (statusTimer) window.clearInterval(statusTimer);
@@ -276,6 +288,17 @@ onBeforeUnmount(() => {
       <div>
         <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
+        <button
+          class="theme-toggle"
+          type="button"
+          :title="themeButtonLabel"
+          :aria-label="themeButtonLabel"
+          :aria-pressed="theme === 'dark'"
+          @click="toggleTheme"
+        >
+          <Sun v-if="theme === 'dark'" :size="18" />
+          <Moon v-else :size="18" />
+        </button>
       </div>
     </nav>
 
