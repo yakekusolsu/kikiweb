@@ -111,6 +111,26 @@ relay のドメインを変更するときは `extension/public/manifest.json` �
 
 サイドパネルを閉じると音声再生も停止します。
 
+## Mozilla Firefox 拡張機能
+
+Firefox 142 以降では、Chrome 版と同じプレイヤーをFirefoxのサイドバーから利用できます。
+
+```bash
+npm install --prefix extension
+npm run build:firefox
+```
+
+一時的に読み込んで試す場合:
+
+1. Firefox で `about:debugging#/runtime/this-firefox` を開きます。
+2. 「一時的なアドオンを読み込む」を押します。
+3. `extension/dist-firefox/manifest.json` を選択します。
+4. ツールバーの KikiWeb アイコンを押すとサイドバーが開きます。
+
+一時的に読み込んだアドオンはFirefoxの再起動時に解除されます。通常版Firefoxへ恒久的に
+インストールするには、`extension/dist-firefox` の内容をZIPにして
+Mozilla Add-ons（AMO）で署名する必要があります。
+
 ## 注意
 
 Discord VC の音声を配信するため、参加者に用途を説明し、サーバーのルールと各地域の法律を守って使ってください。

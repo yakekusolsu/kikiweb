@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "KikiWeb for Firefox",
+  "version": "1.0.0",
+  "description": "Discord Botが接続しているVCをFirefoxのサイドバーから聞けます。",
+  "host_permissions": [
+    "https://kikiweb.onrender.com/*",
+    "http://localhost:8787/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "KikiWebを開く",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "sidebar_action": {
+    "default_title": "KikiWeb",
+    "default_panel": "index.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    },
+    "open_at_install": true
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "kikiweb@yakekusolsu.github.io",
+      "data_collection_permissions": {
+        "required": ["none"]
+      },
+      "strict_min_version": "142.0"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

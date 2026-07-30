@@ -38,6 +38,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://kikiweb.onre
 );
 const LISTEN_TOKEN = import.meta.env.VITE_LISTEN_TOKEN || '';
 const WEBSITE_URL = import.meta.env.VITE_WEBSITE_URL || 'https://kikiweb-seven.vercel.app';
+const BROWSER_LABEL = import.meta.env.VITE_BROWSER_LABEL || 'Chrome Side Panel';
 const INVITE_URL = 'https://discord.com/oauth2/authorize?client_id=1498176090072678521';
 
 const status = ref<ApiStatus | null>(null);
@@ -250,7 +251,7 @@ onBeforeUnmount(() => {
         <span class="brand-mark" aria-hidden="true">K</span>
         <span>
           <strong>KikiWeb</strong>
-          <small>Chrome Side Panel</small>
+          <small>{{ BROWSER_LABEL }}</small>
         </span>
       </a>
       <div class="header-actions">

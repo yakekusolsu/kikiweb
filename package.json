@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "npm run dev --prefix server & npm run dev --prefix client",
     "build": "npm run build --prefix server && npm run build --prefix client && npm run build --prefix extension",
-    "build:extension": "npm run build --prefix extension"
+    "build:extension": "npm run build --prefix extension",
+    "build:firefox": "npm run build:firefox --prefix extension"
   }
 }
