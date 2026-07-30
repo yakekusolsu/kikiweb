@@ -55,6 +55,34 @@ button.primary {
   background: #183f4a;
 }
 
+.invite-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #c8523b;
+  border-radius: 8px;
+  padding: 0 18px;
+  color: #8b2f1d;
+  background: #fff7f3;
+  font-weight: 700;
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.invite-link:hover {
+  transform: translateY(-1px);
+  border-color: #a83f2b;
+  background: #ffede6;
+}
+
+.invite-link:focus-visible {
+  outline: 3px solid rgba(200, 82, 59, 0.3);
+  outline-offset: 2px;
+}
+
 code {
   border-radius: 5px;
   padding: 2px 6px;

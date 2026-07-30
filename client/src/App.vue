@@ -358,6 +358,14 @@ onBeforeUnmount(() => {
         </button>
         <button type="button" @click="stopListening">停止</button>
         <button type="button" @click="fetchStatus">状態更新</button>
+        <a
+          class="invite-link"
+          href="https://discord.com/oauth2/authorize?client_id=1498176090072678521"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Botを鯖に入れる！
+        </a>
       </div>
 
       <label class="field">
