@@ -272,12 +272,8 @@ code {
 .mark {
   width: 56px;
   height: 56px;
-  display: grid;
-  place-items: center;
   border-radius: 8px;
-  color: #ffffff;
-  background: var(--coral);
-  font-weight: 800;
+  display: block;
 }
 
 .eyebrow,

@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
 
     <section v-if="currentPage === 'home'" class="listen-panel">
       <div class="brand-row">
-        <div class="mark" aria-hidden="true">K</div>
+        <img class="mark" src="/favicon.svg" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">Discord VC listen-only relay</p>
           <h1>KikiWeb</h1>
