@@ -141,9 +141,6 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         return False
 
     def write(self, user: Optional[discord.abc.User], data: voice_recv.VoiceData) -> None:
-        if user is not None and getattr(user, "bot", False):
-            return
-
         decoder_key = user.id if user is not None else 0
         pcm = getattr(data, "pcm", None)
         if not pcm:

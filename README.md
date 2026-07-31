@@ -45,6 +45,7 @@ install_kikiweb_commands(
 ```
 
 `!kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`!kikiweb_leave` で停止します。
+VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 
 ### 複数サーバー
 
