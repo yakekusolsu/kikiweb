@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
   <main>
     <header class="app-header">
       <a class="brand" :href="WEBSITE_URL" target="_blank" rel="noreferrer">
-        <span class="brand-mark" aria-hidden="true">K</span>
+        <img class="brand-icon" src="/icons/icon.svg" alt="" aria-hidden="true" />
         <span>
           <strong>KikiWeb</strong>
           <small>{{ BROWSER_LABEL }}</small>

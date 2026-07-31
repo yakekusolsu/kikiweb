@@ -135,6 +135,14 @@ footer a {
   font-weight: 850;
 }
 
+.brand-icon {
+  width: 42px;
+  height: 42px;
+  display: block;
+  flex: 0 0 42px;
+  border-radius: 8px;
+}
+
 .brand strong,
 .brand small {
   display: block;
