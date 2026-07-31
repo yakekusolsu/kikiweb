@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KikiWeb for Firefox",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Discord Botが接続しているVCをFirefoxのサイドバーから聞けます。",
   "host_permissions": [
     "https://kikiweb.onrender.com/*",
@@ -20,7 +20,7 @@
   },
   "sidebar_action": {
     "default_title": "KikiWeb",
-    "default_panel": "index.html",
+    "default_panel": "firefox/index.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

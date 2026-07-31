@@ -1,14 +1,12 @@
 import { copyFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
 
 const extensionRoot = __dirname;
 
 export default defineConfig({
   base: './',
   plugins: [
-    vue(),
     {
       name: 'kikiweb-firefox-manifest',
       closeBundle() {
@@ -30,5 +28,10 @@ export default defineConfig({
   build: {
     outDir: 'dist-firefox',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        index: resolve(extensionRoot, 'firefox/index.html'),
+      },
+    },
   },
 });
