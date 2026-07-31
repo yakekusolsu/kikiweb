@@ -60,6 +60,7 @@ const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
 const currentPage = computed(() => {
   if (route.value === '#/terms') return 'terms';
   if (route.value === '#/privacy') return 'privacy';
+  if (route.value === '#/links') return 'links';
   return 'home';
 });
 const availableServers = computed(() => status.value?.servers ?? []);
@@ -286,6 +287,7 @@ onBeforeUnmount(() => {
     <nav class="top-nav" aria-label="ページ">
       <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined">KikiWeb</a>
       <div>
+        <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined">リンク</a>
         <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
         <button
@@ -411,6 +413,35 @@ onBeforeUnmount(() => {
       <p v-if="statusError" class="error">Status API: {{ statusError }}</p>
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
+
+    <article v-if="currentPage === 'links'" class="document-panel links-panel">
+      <p class="eyebrow">Links</p>
+      <h1>リンク</h1>
+      <p class="updated">KikiWeb の連絡先と関連リンクです。</p>
+
+      <div class="link-list">
+        <a href="mailto:kobaka2424@gmail.com">
+          <span>メールアドレス</span>
+          <strong>kobaka2424@gmail.com</strong>
+        </a>
+        <a href="https://github.com/yakekusolsu" target="_blank" rel="noreferrer">
+          <span>GitHub</span>
+          <strong>github.com/yakekusolsu</strong>
+        </a>
+        <div>
+          <span>Discord</span>
+          <strong>@yakekusolsu</strong>
+        </div>
+        <a href="https://dsc.gg/naraku" target="_blank" rel="noreferrer">
+          <span>奈落鯖</span>
+          <strong>dsc.gg/naraku</strong>
+        </a>
+        <a href="https://x.com/nagetobasi2nd" target="_blank" rel="noreferrer">
+          <span>Twitter(現X)</span>
+          <strong>x.com/nagetobasi2nd</strong>
+        </a>
+      </div>
+    </article>
 
     <article v-if="currentPage === 'terms'" class="document-panel">
       <p class="eyebrow">Terms of Service</p>

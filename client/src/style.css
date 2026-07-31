@@ -328,6 +328,52 @@ h2 {
   font-size: 0.95rem;
 }
 
+.link-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.link-list a,
+.link-list div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 16px;
+  color: var(--text);
+  background: var(--surface-soft);
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.link-list a:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+  background: var(--surface-strong);
+}
+
+.link-list a:focus-visible {
+  outline: 3px solid rgba(200, 82, 59, 0.3);
+  outline-offset: 2px;
+}
+
+.link-list span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.link-list strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1.02rem;
+}
+
 .status-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
