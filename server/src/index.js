@@ -211,9 +211,13 @@ wss.on('connection', (ws, _request, url) => {
       let streamType = STREAM_VOICE;
       let sourceId = 'python-bot';
       let pcm = message;
-      if (message.length === PCM_FRAME_BYTES + 9 && message[0] === STREAM_SOUNDBOARD) {
-        streamType = STREAM_SOUNDBOARD;
-        sourceId = `soundboard-${message.readBigUInt64BE(1)}`;
+      if (
+        message.length === PCM_FRAME_BYTES + 9 &&
+        (message[0] === STREAM_VOICE || message[0] === STREAM_SOUNDBOARD)
+      ) {
+        streamType = message[0];
+        const sourcePrefix = streamType === STREAM_SOUNDBOARD ? 'soundboard' : 'voice';
+        sourceId = `${sourcePrefix}-${message.readBigUInt64BE(1)}`;
         pcm = message.subarray(9);
       } else if (
         message.length === PCM_FRAME_BYTES + 1 &&
@@ -235,7 +239,7 @@ wss.on('connection', (ws, _request, url) => {
     ws.on('close', () => {
       if (stream.ingestClient === ws) {
         stream.ingestClient = null;
-        stream.mixer.removeInput('python-bot');
+        stream.mixer.clearInputs();
         stream.soundboardMixer.clearInputs();
       }
     });

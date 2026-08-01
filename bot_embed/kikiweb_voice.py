@@ -141,23 +141,25 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         return False
 
     def write(self, user: Optional[discord.abc.User], data: voice_recv.VoiceData) -> None:
-        decoder_key = user.id if user is not None else 0
+        packet = getattr(data, "packet", None)
+        raw_source_id = user.id if user is not None else getattr(packet, "ssrc", 0)
+        source_id = int(raw_source_id or 0)
         pcm = getattr(data, "pcm", None)
         if not pcm:
             return
 
-        buffered_pcm = self.pcm_remainders.get(decoder_key, b"") + bytes(pcm)
+        buffered_pcm = self.pcm_remainders.get(source_id, b"") + bytes(pcm)
         complete_bytes = len(buffered_pcm) - (len(buffered_pcm) % FRAME_BYTES)
         if complete_bytes == 0:
-            self.pcm_remainders[decoder_key] = buffered_pcm
+            self.pcm_remainders[source_id] = buffered_pcm
             return
 
-        self.relay.enqueue_pcm(buffered_pcm[:complete_bytes])
+        self.relay.enqueue_pcm(buffered_pcm[:complete_bytes], source_id=source_id)
         remainder = buffered_pcm[complete_bytes:]
         if remainder:
-            self.pcm_remainders[decoder_key] = remainder
+            self.pcm_remainders[source_id] = remainder
         else:
-            self.pcm_remainders.pop(decoder_key, None)
+            self.pcm_remainders.pop(source_id, None)
 
     def cleanup(self) -> None:
         self.pcm_remainders.clear()
@@ -274,10 +276,7 @@ class KikiWebVoiceRelay:
         stream_type: int = STREAM_VOICE,
         source_id: int = 0,
     ) -> None:
-        if stream_type == STREAM_SOUNDBOARD:
-            header = bytes((STREAM_SOUNDBOARD,)) + source_id.to_bytes(8, "big", signed=False)
-        else:
-            header = bytes((STREAM_VOICE,))
+        header = bytes((stream_type,)) + source_id.to_bytes(8, "big", signed=False)
 
         for offset in range(0, len(pcm), FRAME_BYTES):
             frame = pcm[offset : offset + FRAME_BYTES]
