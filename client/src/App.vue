@@ -138,8 +138,8 @@ const startListening = async () => {
       throw new Error('このブラウザは AudioWorklet に対応していません。');
     }
 
-    audioContext = new AudioContext();
-    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=4');
+    audioContext = new AudioContext({ sampleRate: 48_000 });
+    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=5');
     workletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
