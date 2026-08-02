@@ -477,22 +477,20 @@ async function startListening() {
     }
 
     audioContext = new AudioContext({ sampleRate: 48_000 });
-    if (audioContext.sampleRate !== 48_000) {
-      throw new Error(`48kHz再生に対応していません（${audioContext.sampleRate}Hz）。`);
-    }
-
-    const workletUrl = new URL('kikiweb-audio-worklet.js', window.location.href).toString();
+    const workletUrl = new URL('/kikiweb-audio-worklet.js', window.location.href).toString();
     await audioContext.audioWorklet.addModule(workletUrl);
 
     voiceNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
+      processorOptions: { sourceSampleRate: 48_000 },
     });
     soundboardNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
+      processorOptions: { sourceSampleRate: 48_000 },
     });
 
     voiceNode.port.postMessage({ type: 'volume', value: state.volume / 100 });
