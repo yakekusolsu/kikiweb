@@ -1,16 +1,22 @@
 class KikiWebPcmPlayer extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
     this.buffers = [];
-    this.readIndex = 0;
+    this.readFrameIndex = 0;
+    this.sourcePhase = 0;
     this.queuedSamples = 0;
     this.started = false;
     this.volume = 0.85;
     this.underruns = 0;
     this.framesUntilStats = 0;
-    this.prebufferSamples = Math.round(sampleRate * 0.12);
-    this.resumeBufferSamples = Math.round(sampleRate * 0.08);
-    this.maxQueuedSamples = Math.round(sampleRate * 1.2);
+    this.sourceSampleRate = Math.max(
+      8_000,
+      Number(options?.processorOptions?.sourceSampleRate) || 48_000,
+    );
+    this.sourceStep = this.sourceSampleRate / sampleRate;
+    this.prebufferSamples = Math.round(this.sourceSampleRate * 0.12);
+    this.resumeBufferSamples = Math.round(this.sourceSampleRate * 0.08);
+    this.maxQueuedSamples = Math.round(this.sourceSampleRate * 1.2);
 
     this.port.onmessage = (event) => {
       const message = event.data;
@@ -23,8 +29,9 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 
         while (this.queuedSamples > this.maxQueuedSamples && this.buffers.length > 1) {
           const dropped = this.buffers.shift();
-          this.queuedSamples -= Math.floor(dropped.length / 2);
-          this.readIndex = 0;
+          this.queuedSamples -= Math.floor(dropped.length / 2) - this.readFrameIndex;
+          this.readFrameIndex = 0;
+          this.sourcePhase = 0;
         }
         return;
       }
@@ -36,11 +43,39 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 
       if (message.type === "reset") {
         this.buffers = [];
-        this.readIndex = 0;
+        this.readFrameIndex = 0;
+        this.sourcePhase = 0;
         this.queuedSamples = 0;
         this.started = false;
       }
     };
+  }
+
+  sampleAt(frameOffset, channel) {
+    let index = this.readFrameIndex + frameOffset;
+    for (const buffer of this.buffers) {
+      const frameCount = Math.floor(buffer.length / 2);
+      if (index < frameCount) return buffer[index * 2 + channel];
+      index -= frameCount;
+    }
+    return null;
+  }
+
+  consumeSourceFrames(frameCount) {
+    let remaining = frameCount;
+    while (remaining > 0 && this.buffers.length > 0) {
+      const bufferFrames = Math.floor(this.buffers[0].length / 2);
+      const available = bufferFrames - this.readFrameIndex;
+      const consumed = Math.min(remaining, available);
+      this.readFrameIndex += consumed;
+      this.queuedSamples -= consumed;
+      remaining -= consumed;
+
+      if (this.readFrameIndex >= bufferFrames) {
+        this.buffers.shift();
+        this.readFrameIndex = 0;
+      }
+    }
   }
 
   process(_inputs, outputs) {
@@ -69,19 +104,25 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
         continue;
       }
 
-      const buffer = this.buffers[0];
-      left[i] = (buffer[this.readIndex] / 32768) * this.volume;
-      right[i] = (buffer[this.readIndex + 1] / 32768) * this.volume;
-      this.readIndex += 2;
-      this.queuedSamples -= 1;
+      const leftCurrent = this.sampleAt(0, 0);
+      const rightCurrent = this.sampleAt(0, 1);
+      if (leftCurrent === null || rightCurrent === null) continue;
 
-      if (this.readIndex >= buffer.length) {
-        this.buffers.shift();
-        this.readIndex = 0;
-      }
+      const leftNext = this.sampleAt(1, 0) ?? leftCurrent;
+      const rightNext = this.sampleAt(1, 1) ?? rightCurrent;
+      const leftSample = leftCurrent + (leftNext - leftCurrent) * this.sourcePhase;
+      const rightSample = rightCurrent + (rightNext - rightCurrent) * this.sourcePhase;
+      left[i] = (leftSample / 32768) * this.volume;
+      right[i] = (rightSample / 32768) * this.volume;
+
+      this.sourcePhase += this.sourceStep;
+      const consumedFrames = Math.floor(this.sourcePhase);
+      this.sourcePhase -= consumedFrames;
+      this.consumeSourceFrames(consumedFrames);
 
       if (this.queuedSamples < this.resumeBufferSamples && this.buffers.length === 0) {
         this.started = false;
+        this.sourcePhase = 0;
       }
     }
 
@@ -96,7 +137,7 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
     this.framesUntilStats = Math.round(sampleRate / 4);
     this.port.postMessage({
       type: "stats",
-      bufferMs: Math.round((this.queuedSamples / sampleRate) * 1000),
+      bufferMs: Math.round((this.queuedSamples / this.sourceSampleRate) * 1000),
       underruns: this.underruns,
     });
   }

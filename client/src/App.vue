@@ -56,6 +56,12 @@ let workletNode: AudioWorkletNode | null = null;
 let soundboardWorkletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
 
+const resumeAudio = () => {
+  if (audioContext && audioContext.state !== 'running' && audioContext.state !== 'closed') {
+    void audioContext.resume().catch(() => undefined);
+  }
+};
+
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
 const currentPage = computed(() => {
   if (route.value === '#/terms') return 'terms';
@@ -132,21 +138,19 @@ const startListening = async () => {
       throw new Error('このブラウザは AudioWorklet に対応していません。');
     }
 
-    audioContext = new AudioContext({ sampleRate: 48_000 });
-    if (audioContext.sampleRate !== 48_000) {
-      throw new Error(`48kHz 再生に対応していません。現在のサンプルレート: ${audioContext.sampleRate}Hz`);
-    }
-
-    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=3');
+    audioContext = new AudioContext();
+    await audioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=4');
     workletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
+      processorOptions: { sourceSampleRate: 48_000 },
     });
     soundboardWorkletNode = new AudioWorkletNode(audioContext, 'kikiweb-pcm-player', {
       numberOfInputs: 0,
       numberOfOutputs: 1,
       outputChannelCount: [2],
+      processorOptions: { sourceSampleRate: 48_000 },
     });
     workletNode.port.postMessage({ type: 'volume', value: volume.value / 100 });
     soundboardWorkletNode.port.postMessage({ type: 'volume', value: volume.value / 100 });
@@ -239,6 +243,9 @@ const syncRoute = () => {
 fetchStatus();
 statusTimer = window.setInterval(fetchStatus, 5_000);
 window.addEventListener('hashchange', syncRoute);
+window.addEventListener('pointerdown', resumeAudio, { passive: true });
+window.addEventListener('pageshow', resumeAudio);
+document.addEventListener('visibilitychange', resumeAudio);
 
 watch(volume, (value) => {
   workletNode?.port.postMessage({ type: 'volume', value: value / 100 });
@@ -279,6 +286,9 @@ onBeforeUnmount(() => {
   stopListening();
   if (statusTimer) window.clearInterval(statusTimer);
   window.removeEventListener('hashchange', syncRoute);
+  window.removeEventListener('pointerdown', resumeAudio);
+  window.removeEventListener('pageshow', resumeAudio);
+  document.removeEventListener('visibilitychange', resumeAudio);
 });
 </script>
 
