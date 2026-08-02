@@ -50,6 +50,8 @@ class KikiWebConfig:
     ingest_token: str = ""
     reconnect_delay: float = 3.0
     listen_restart_delay: float = 1.0
+    listen_watchdog_interval: float = 5.0
+    listen_inactivity_timeout: float = 90.0
     status_interval: float = 1.0
     queue_size: int = 160
 
@@ -147,6 +149,7 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         pcm = getattr(data, "pcm", None)
         if not pcm:
             return
+        self.relay.note_voice_packet()
 
         buffered_pcm = self.pcm_remainders.get(source_id, b"") + bytes(pcm)
         complete_bytes = len(buffered_pcm) - (len(buffered_pcm) % FRAME_BYTES)
@@ -176,6 +179,10 @@ class KikiWebVoiceRelay:
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=config.queue_size)
         self.sender_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
+        self.listen_watchdog_task: Optional[asyncio.Task[None]] = None
+        self.listen_restart_lock = asyncio.Lock()
+        self.ignore_next_after = False
+        self.last_voice_packet_at = time.monotonic()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.closed = asyncio.Event()
         self.server_id = 0
@@ -215,7 +222,12 @@ class KikiWebVoiceRelay:
             voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=True)
 
         self.voice_client = voice_client
-        self._start_listening()
+        await self._start_listening()
+        if not self.listen_watchdog_task or self.listen_watchdog_task.done():
+            self.listen_watchdog_task = asyncio.create_task(
+                self._listen_watchdog(),
+                name=f"kikiweb-listen-watchdog-{channel.guild.id}",
+            )
 
     async def disconnect(self) -> None:
         self.closed.set()
@@ -236,6 +248,11 @@ class KikiWebVoiceRelay:
             with contextlib.suppress(asyncio.CancelledError):
                 await self.listen_restart_task
 
+        if self.listen_watchdog_task:
+            self.listen_watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.listen_watchdog_task
+
         if self.socket and not self.socket.closed:
             await self.socket.close()
 
@@ -248,7 +265,11 @@ class KikiWebVoiceRelay:
         self.session = None
         self.sender_task = None
         self.listen_restart_task = None
+        self.listen_watchdog_task = None
         self.clear_audio_queue()
+
+    def note_voice_packet(self) -> None:
+        self.last_voice_packet_at = time.monotonic()
 
     def enqueue_pcm(
         self,
@@ -350,6 +371,9 @@ class KikiWebVoiceRelay:
             LOGGER.exception("KikiWeb could not relay a Discord soundboard effect")
 
     def _after_listen(self, error: Optional[Exception]) -> None:
+        if self.ignore_next_after:
+            self.ignore_next_after = False
+            return
         if error:
             message = str(error).lower()
             if "corrupted stream" in message:
@@ -359,15 +383,19 @@ class KikiWebVoiceRelay:
         if self.loop and not self.closed.is_set():
             self.loop.call_soon_threadsafe(self._schedule_listen_restart)
 
-    def _start_listening(self) -> None:
-        if not self.voice_client or self.closed.is_set():
-            return
+    async def _start_listening(self) -> None:
+        async with self.listen_restart_lock:
+            if not self.voice_client or self.closed.is_set():
+                return
 
-        if self.voice_client.is_listening():
-            self.voice_client.stop_listening()
+            if self.voice_client.is_listening():
+                self.ignore_next_after = True
+                self.voice_client.stop_listening()
+                await asyncio.sleep(0.25)
 
-        self.sink = KikiWebAudioSink(self)
-        self.voice_client.listen(self.sink, after=self._after_listen)
+            self.sink = KikiWebAudioSink(self)
+            self.voice_client.listen(self.sink, after=self._after_listen)
+            self.last_voice_packet_at = time.monotonic()
 
     def _schedule_listen_restart(self) -> None:
         if self.listen_restart_task and not self.listen_restart_task.done():
@@ -398,7 +426,33 @@ class KikiWebVoiceRelay:
             return
 
         LOGGER.info("Restarting KikiWeb voice receiver")
-        self._start_listening()
+        await self._start_listening()
+
+    def _receiver_is_healthy(self) -> bool:
+        if not self.voice_client or not self.voice_client.is_listening():
+            return False
+        reader = getattr(self.voice_client, "_reader", None)
+        packet_router = getattr(reader, "packet_router", None)
+        return bool(packet_router and packet_router.is_alive())
+
+    async def _listen_watchdog(self) -> None:
+        while not self.closed.is_set():
+            await asyncio.sleep(self.config.listen_watchdog_interval)
+            if self.closed.is_set() or not self.voice_client or not self.voice_client.is_connected():
+                continue
+
+            if not self._receiver_is_healthy():
+                LOGGER.warning("KikiWeb voice receiver stopped; restarting it.")
+                await self._start_listening()
+                continue
+
+            inactive_for = time.monotonic() - self.last_voice_packet_at
+            if inactive_for >= self.config.listen_inactivity_timeout:
+                LOGGER.warning(
+                    "KikiWeb voice receiver produced no PCM for %.0f seconds; refreshing it.",
+                    inactive_for,
+                )
+                await self._start_listening()
 
     async def _sender_loop(self) -> None:
         while not self.closed.is_set():
