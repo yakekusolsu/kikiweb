@@ -57,7 +57,7 @@ const talkUnlocked = ref(
 const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('idle');
 const talkError = ref('');
 const storedTalkGain = Number(window.localStorage.getItem('kikiweb-talk-gain'));
-const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(4, Math.max(1, storedTalkGain)) : 2.5);
+const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(8.5, Math.max(1, storedTalkGain)) : 2.5);
 
 const secretSequence = [
   'home',
@@ -492,7 +492,7 @@ watch(selectedServerId, (value, previousValue) => {
 watch(theme, saveTheme);
 
 watch(talkGain, (value) => {
-  const normalized = Math.min(4, Math.max(1, Number(value) || 1));
+  const normalized = Math.min(8.5, Math.max(1, Number(value) || 1));
   if (value !== normalized) {
     talkGain.value = normalized;
     return;
@@ -651,7 +651,7 @@ onBeforeUnmount(() => {
 
       <label v-if="talkUnlocked" class="field">
         <span>マイク送話音量 {{ talkGain.toFixed(1) }}x</span>
-        <input v-model.number="talkGain" min="1" max="4" step="0.1" type="range" />
+        <input v-model.number="talkGain" min="1" max="8.5" step="0.1" type="range" />
       </label>
 
       <div class="audio-meter" aria-live="polite">
