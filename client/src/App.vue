@@ -376,15 +376,15 @@ const startTalking = async () => {
       throw new Error('このブラウザではマイク送話を利用できません。');
     }
 
-    talkMicStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 2,
-        sampleRate: 48_000,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    const audioConstraints: MediaTrackConstraints & { voiceIsolation?: boolean } = {
+      channelCount: 1,
+      sampleRate: 48_000,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false,
+      voiceIsolation: true,
+    };
+    talkMicStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
     talkAudioContext = new AudioContext({ sampleRate: 48_000 });
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
@@ -395,6 +395,7 @@ const startTalking = async () => {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
+      processorOptions: { noiseGateThreshold: 0.012 },
     });
     talkCaptureNode.port.onmessage = (event) => {
       if (event.data?.type === 'pcm' && event.data.buffer) {

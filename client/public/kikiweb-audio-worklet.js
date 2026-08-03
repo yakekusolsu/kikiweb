@@ -166,6 +166,16 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 registerProcessor("kikiweb-pcm-player", KikiWebPcmPlayer);
 
 class KikiWebPcmCapture extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.noiseGateThreshold = Math.max(
+      0,
+      Math.min(0.1, Number(options?.processorOptions?.noiseGateThreshold) || 0.012),
+    );
+    this.gateGain = 0;
+    this.gateHoldFrames = 0;
+  }
+
   process(inputs, outputs) {
     const input = inputs[0];
     const output = outputs[0];
@@ -173,10 +183,24 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const right = input?.[1] || left;
 
     if (left && right) {
+      let sum = 0;
+      for (let index = 0; index < left.length; index += 1) {
+        sum += (left[index] * left[index] + right[index] * right[index]) / 2;
+      }
+      const rms = Math.sqrt(sum / left.length);
+      if (rms >= this.noiseGateThreshold) {
+        this.gateHoldFrames = Math.round(sampleRate * 0.18);
+      } else {
+        this.gateHoldFrames = Math.max(0, this.gateHoldFrames - left.length);
+      }
+      const targetGain = this.gateHoldFrames > 0 ? 1 : 0;
+      const smoothing = targetGain > this.gateGain ? 0.45 : 0.08;
+      this.gateGain += (targetGain - this.gateGain) * smoothing;
+
       const pcm = new Int16Array(left.length * 2);
       for (let index = 0; index < left.length; index += 1) {
-        pcm[index * 2] = Math.max(-1, Math.min(1, left[index])) * 32767;
-        pcm[index * 2 + 1] = Math.max(-1, Math.min(1, right[index])) * 32767;
+        pcm[index * 2] = Math.max(-1, Math.min(1, left[index] * this.gateGain)) * 32767;
+        pcm[index * 2 + 1] = Math.max(-1, Math.min(1, right[index] * this.gateGain)) * 32767;
       }
       this.port.postMessage({ type: "pcm", buffer: pcm.buffer }, [pcm.buffer]);
     }
