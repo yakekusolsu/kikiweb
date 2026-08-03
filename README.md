@@ -47,6 +47,10 @@ install_kikiweb_commands(
 `!kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`!kikiweb_leave` で停止します。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 
+ブラウザからVCへ送話する場合は、BotにVCでの「発言」権限を与え、最新版の`kikiweb_voice.py`へ更新後に
+一度`!kikiweb_leave`してから`!kikiweb_join`してください。既に接続済みのBotは、再接続するまでミュート状態が
+更新されません。
+
 ### 複数サーバー
 
 同じ Bot を複数の Discord サーバーへ追加し、各サーバーで `kikiweb_join` を実行できます。relay は
@@ -76,6 +80,7 @@ Render ではこのリポジトリの `render.yaml` を使えます。環境変�
 - `CLIENT_ORIGIN`: Vercel の URL。例: `https://your-app.vercel.app`
 - `INGEST_TOKEN`: Python Bot から relay へ音声を送るためのトークン
 - `LISTEN_TOKEN`: 任意。設定すると、この値を知っている人だけが聞けます。
+- `TALK_TOKEN`: Webマイク送話用。空欄では送話WebSocketを受け付けません。
 
 Discord Bot の `DISCORD_TOKEN` は Render ではなく、既存 Python Bot を動かしている環境に設定してください。
 複数サーバーでも Render の `INGEST_TOKEN` と Bot の `KIKIWEB_INGEST_TOKEN` は同じ1組を使います。
@@ -86,6 +91,7 @@ Vercel の Project Root は `client` にしてください。
 
 - `VITE_API_BASE_URL`: Render の URL。例: `https://kikiweb-api.onrender.com`
 - `VITE_LISTEN_TOKEN`: Render 側で `LISTEN_TOKEN` を設定した場合のみ同じ値
+- `VITE_TALK_TOKEN`: Render 側の `TALK_TOKEN` と同じ値。サイト内に埋め込まれるため、送話の本格運用では別途ログイン機能を追加してください。
 
 ## Google Chrome 拡張機能
 

@@ -38,6 +38,7 @@ type ApiStatus = {
 
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
 const listenToken = ref(import.meta.env.VITE_LISTEN_TOKEN || '');
+const talkToken = ref(import.meta.env.VITE_TALK_TOKEN || '');
 const status = ref<ApiStatus | null>(null);
 const statusError = ref('');
 const playerState = ref<'idle' | 'connecting' | 'playing' | 'stopped' | 'error'>('idle');
@@ -49,16 +50,46 @@ const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') 
 const selectedServerId = ref(window.localStorage.getItem('kikiweb-server-id') || '');
 const route = ref(window.location.hash || '#/');
 const theme = ref<Theme>(getInitialTheme());
+const talkUnlocked = ref(window.sessionStorage.getItem('kikiweb-talk-unlocked') === '1');
+const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('idle');
+const talkError = ref('');
+
+const secretSequence = [
+  'home',
+  'links',
+  'theme',
+  'theme',
+  'terms',
+  'links',
+  'theme',
+  'theme',
+  'terms',
+  'theme',
+  'theme',
+  'theme',
+  'theme',
+  'home',
+];
+let secretSequenceIndex = 0;
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let soundboardWorkletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
+let talkSocket: WebSocket | null = null;
+let talkAudioContext: AudioContext | null = null;
+let talkSourceNode: MediaStreamAudioSourceNode | null = null;
+let talkCaptureNode: AudioWorkletNode | null = null;
+let talkMicStream: MediaStream | null = null;
+let talkRemainder = new Uint8Array(0);
 
 const resumeAudio = () => {
   if (audioContext && audioContext.state !== 'running' && audioContext.state !== 'closed') {
     void audioContext.resume().catch(() => undefined);
+  }
+  if (talkAudioContext && talkAudioContext.state !== 'running' && talkAudioContext.state !== 'closed') {
+    void talkAudioContext.resume().catch(() => undefined);
   }
 };
 
@@ -87,7 +118,24 @@ const themeButtonLabel = computed(() =>
   theme.value === 'dark' ? 'ライトモードに切り替える' : 'ダークモードに切り替える',
 );
 
+const recordSecretAction = (action: string) => {
+  if (talkUnlocked.value) return;
+
+  if (action === secretSequence[secretSequenceIndex]) {
+    secretSequenceIndex += 1;
+    if (secretSequenceIndex === secretSequence.length) {
+      talkUnlocked.value = true;
+      window.sessionStorage.setItem('kikiweb-talk-unlocked', '1');
+      secretSequenceIndex = 0;
+    }
+    return;
+  }
+
+  secretSequenceIndex = action === secretSequence[0] ? 1 : 0;
+};
+
 const toggleTheme = () => {
+  recordSecretAction('theme');
   theme.value = theme.value === 'dark' ? 'light' : 'dark';
 };
 
@@ -100,6 +148,19 @@ const wsUrl = computed(() => {
   }
   if (listenToken.value) {
     url.searchParams.set('token', listenToken.value);
+  }
+  return url.toString();
+});
+
+const talkWsUrl = computed(() => {
+  const url = new URL(normalizedApiUrl.value);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/talk';
+  if (selectedServerId.value) {
+    url.searchParams.set('serverId', selectedServerId.value);
+  }
+  if (talkToken.value) {
+    url.searchParams.set('token', talkToken.value);
   }
   return url.toString();
 });
@@ -235,6 +296,125 @@ const stopListening = () => {
   }
 };
 
+const releaseTalkResources = () => {
+  talkCaptureNode?.disconnect();
+  talkCaptureNode?.port.close();
+  talkCaptureNode = null;
+  talkSourceNode?.disconnect();
+  talkSourceNode = null;
+  talkMicStream?.getTracks().forEach((track) => track.stop());
+  talkMicStream = null;
+  void talkAudioContext?.close();
+  talkAudioContext = null;
+  talkRemainder = new Uint8Array(0);
+};
+
+const stopTalking = () => {
+  const closingSocket = talkSocket;
+  talkSocket = null;
+  if (closingSocket) {
+    if (closingSocket.readyState === WebSocket.OPEN) {
+      closingSocket.send(JSON.stringify({ type: 'talk-stop' }));
+    }
+    closingSocket.onopen = null;
+    closingSocket.onmessage = null;
+    closingSocket.onerror = null;
+    closingSocket.onclose = null;
+    closingSocket.close();
+  }
+  releaseTalkResources();
+  if (talkState.value !== 'idle') talkState.value = 'stopped';
+};
+
+const sendTalkPcm = (buffer: ArrayBuffer) => {
+  if (!talkSocket || talkSocket.readyState !== WebSocket.OPEN) return;
+
+  const incoming = new Uint8Array(buffer);
+  const combined = new Uint8Array(talkRemainder.length + incoming.length);
+  combined.set(talkRemainder);
+  combined.set(incoming, talkRemainder.length);
+
+  let offset = 0;
+  while (offset + 3_840 <= combined.length) {
+    talkSocket.send(combined.slice(offset, offset + 3_840));
+    offset += 3_840;
+  }
+  talkRemainder = combined.slice(offset);
+};
+
+const startTalking = async () => {
+  stopTalking();
+  talkState.value = 'connecting';
+  talkError.value = '';
+
+  try {
+    if (!selectedServerId.value || !selectedServer.value) {
+      throw new Error('接続中のDiscordサーバーを選択してください。');
+    }
+    if (!talkToken.value) {
+      throw new Error('送話用トークンが設定されていません。');
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !('AudioWorkletNode' in window)) {
+      throw new Error('このブラウザではマイク送話を利用できません。');
+    }
+
+    talkMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 2,
+        sampleRate: 48_000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    talkAudioContext = new AudioContext({ sampleRate: 48_000 });
+    if (talkAudioContext.sampleRate !== 48_000) {
+      throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
+    }
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=6');
+    talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
+    talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+    });
+    talkCaptureNode.port.onmessage = (event) => {
+      if (event.data?.type === 'pcm' && event.data.buffer) {
+        sendTalkPcm(event.data.buffer as ArrayBuffer);
+      }
+    };
+    talkSourceNode.connect(talkCaptureNode);
+    talkCaptureNode.connect(talkAudioContext.destination);
+    await talkAudioContext.resume();
+
+    const nextSocket = new WebSocket(talkWsUrl.value);
+    talkSocket = nextSocket;
+    nextSocket.binaryType = 'arraybuffer';
+    nextSocket.onopen = () => {
+      if (talkSocket === nextSocket) talkState.value = 'talking';
+    };
+    nextSocket.onerror = () => {
+      if (talkSocket !== nextSocket) return;
+      talkError.value = 'マイク送話サーバーへ接続できませんでした。';
+      talkState.value = 'error';
+    };
+    nextSocket.onclose = () => {
+      if (talkSocket !== nextSocket) return;
+      talkSocket = null;
+      releaseTalkResources();
+      if (talkState.value === 'talking' || talkState.value === 'connecting') {
+        talkState.value = 'stopped';
+      }
+    };
+  } catch (error) {
+    releaseTalkResources();
+    talkSocket?.close();
+    talkSocket = null;
+    talkState.value = 'error';
+    talkError.value = error instanceof Error ? error.message : String(error);
+  }
+};
+
 const syncRoute = () => {
   route.value = window.location.hash || '#/';
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -278,12 +458,27 @@ watch(selectedServerId, (value, previousValue) => {
       playerError.value = '';
     }
   }
+
+  if (
+    previousValue &&
+    value !== previousValue &&
+    (talkState.value === 'talking' || talkState.value === 'connecting')
+  ) {
+    stopTalking();
+  }
 });
 
 watch(theme, saveTheme);
 
+watch(currentPage, (page) => {
+  if (page !== 'home' && (talkState.value === 'talking' || talkState.value === 'connecting')) {
+    stopTalking();
+  }
+});
+
 onBeforeUnmount(() => {
   stopListening();
+  stopTalking();
   if (statusTimer) window.clearInterval(statusTimer);
   window.removeEventListener('hashchange', syncRoute);
   window.removeEventListener('pointerdown', resumeAudio);
@@ -295,10 +490,10 @@ onBeforeUnmount(() => {
 <template>
   <main class="app-shell" :class="{ 'document-layout': currentPage !== 'home' }">
     <nav class="top-nav" aria-label="ページ">
-      <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined">KikiWeb</a>
+      <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined" @click="recordSecretAction('home')">KikiWeb</a>
       <div>
-        <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined">リンク</a>
-        <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined">利用規約</a>
+        <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined" @click="recordSecretAction('links')">リンク</a>
+        <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined" @click="recordSecretAction('terms')">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
         <button
           class="theme-toggle"
@@ -393,6 +588,15 @@ onBeforeUnmount(() => {
         </button>
         <button type="button" @click="stopListening">停止</button>
         <button type="button" @click="fetchStatus">状態更新</button>
+        <button
+          v-if="talkUnlocked"
+          class="primary"
+          type="button"
+          :disabled="talkState === 'connecting' || !selectedServer"
+          @click="talkState === 'talking' || talkState === 'connecting' ? stopTalking() : startTalking()"
+        >
+          {{ talkState === 'talking' || talkState === 'connecting' ? 'マイクオフ' : 'マイクオン' }}
+        </button>
         <a
           class="invite-link"
           href="https://discord.com/oauth2/authorize?client_id=1498176090072678521"
@@ -420,6 +624,7 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="playerError" class="error">{{ playerError }}</p>
+      <p v-if="talkUnlocked && talkError" class="error">{{ talkError }}</p>
       <p v-if="statusError" class="error">Status API: {{ statusError }}</p>
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
@@ -460,17 +665,17 @@ onBeforeUnmount(() => {
 
       <h2>1. サービスの内容</h2>
       <p>
-        KikiWeb は、設定された Discord Bot が参加しているボイスチャンネルの音声を、Web ブラウザで聞くための listen-only 配信サービスです。
+        KikiWeb は、設定された Discord Bot が参加しているボイスチャンネルの音声を、Web ブラウザで聞くための音声配信サービスです。
       </p>
 
       <h2>2. 利用条件</h2>
       <p>
-        利用者は、Discord の利用規約、参加サーバーのルール、適用される法令を守って本サービスを利用するものとします。ボイスチャンネル参加者に対して、Bot による音声中継の目的と範囲を事前に説明してください。
+        利用者は、Discord の利用規約、参加サーバーのルール、適用される法令を守って本サービスを利用するものとします。ボイスチャンネル参加者に対して、Bot による音声中継およびWebマイク音声の送話の目的と範囲を事前に説明してください。
       </p>
 
       <h2>3. 禁止事項</h2>
       <p>
-        無断での盗聴、録音、第三者への再配信、嫌がらせ、なりすまし、不正アクセス、LISTEN_TOKEN や Bot トークンの共有、サービスの運用を妨げる行為を禁止します。
+        無断での盗聴、録音、第三者への再配信、嫌がらせ、なりすまし、不正アクセス、送話機能の不正利用、LISTEN_TOKEN や Bot トークンの共有、サービスの運用を妨げる行為を禁止します。
       </p>
 
       <h2>4. 認証情報の管理</h2>
@@ -506,7 +711,7 @@ onBeforeUnmount(() => {
 
       <h2>2. 音声データの扱い</h2>
       <p>
-        ボイスチャンネルの音声は、ブラウザへリアルタイム配信するためにサーバー上で一時的に処理されます。この実装では音声データをファイルとして保存しません。
+        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。この実装では音声データをファイルとして保存しません。
       </p>
 
       <h2>3. 利用目的</h2>

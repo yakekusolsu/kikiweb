@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
 import { config } from './config.js';
 
@@ -122,6 +122,7 @@ const streamFromIngestUrl = (url) => {
       channelId,
       channelName,
       ingestClient: null,
+      talkClient: null,
       lastIngestAt: 0,
       memberCount: 0,
       mutedCount: 0,
@@ -159,13 +160,31 @@ const sendJson = (response, statusCode, body) => {
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  if (url.pathname !== '/audio' && url.pathname !== '/ingest') {
+  if (url.pathname !== '/audio' && url.pathname !== '/ingest' && url.pathname !== '/talk') {
     socket.destroy();
     return;
   }
 
-  const expectedToken = url.pathname === '/ingest' ? config.ingestToken : config.listenToken;
-  if (expectedToken && url.searchParams.get('token') !== expectedToken) {
+  if (
+    url.pathname === '/talk' &&
+    config.clientOrigin !== '*' &&
+    request.headers.origin !== config.clientOrigin
+  ) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  const expectedToken =
+    url.pathname === '/ingest'
+      ? config.ingestToken
+      : url.pathname === '/talk'
+        ? config.talkToken
+        : config.listenToken;
+  if (
+    (url.pathname === '/talk' && !expectedToken) ||
+    (expectedToken && url.searchParams.get('token') !== expectedToken)
+  ) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
@@ -241,11 +260,63 @@ wss.on('connection', (ws, _request, url) => {
         stream.ingestClient = null;
         stream.mixer.clearInputs();
         stream.soundboardMixer.clearInputs();
+        stream.talkClient?.close(1012, 'The Discord Bot disconnected.');
+        stream.talkClient = null;
       }
     });
     ws.send(
       JSON.stringify({
         type: 'ingest-ready',
+        serverId: stream.id,
+        sampleRate: SAMPLE_RATE,
+        channels: CHANNELS,
+      }),
+    );
+    return;
+  }
+
+  if (url.pathname === '/talk') {
+    const stream = resolveAudioStream(url);
+    if (!stream) {
+      ws.close(1013, 'No Discord server is connected.');
+      return;
+    }
+
+    if (stream.talkClient) {
+      stream.talkClient.close(1012, 'Another microphone session started.');
+    }
+    stream.talkClient = ws;
+
+    ws.on('message', (message, isBinary) => {
+      if (!stream.ingestClient || stream.ingestClient.readyState !== WebSocket.OPEN) return;
+
+      if (!isBinary) {
+        try {
+          const payload = JSON.parse(message.toString());
+          if (payload.type === 'talk-stop') {
+            stream.ingestClient.send(JSON.stringify({ type: 'talk-stop' }));
+          }
+        } catch {
+          // Ignore malformed control messages.
+        }
+        return;
+      }
+
+      if (!Buffer.isBuffer(message) || message.length !== PCM_FRAME_BYTES) return;
+      stream.ingestClient.send(message, { binary: true });
+    });
+
+    ws.on('close', () => {
+      if (stream.talkClient !== ws) return;
+      stream.talkClient = null;
+      if (stream.ingestClient?.readyState === WebSocket.OPEN) {
+        stream.ingestClient.send(JSON.stringify({ type: 'talk-stop' }));
+      }
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: 'talk-ready',
         serverId: stream.id,
         sampleRate: SAMPLE_RATE,
         channels: CHANNELS,
@@ -284,6 +355,7 @@ const shutdown = async () => {
   clearInterval(heartbeat);
   for (const stream of streams.values()) {
     stream.ingestClient?.close();
+    stream.talkClient?.close();
     stream.mixer.close();
     stream.soundboardMixer.close();
   }

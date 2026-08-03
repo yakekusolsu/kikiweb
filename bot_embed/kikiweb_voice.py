@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import queue
 import secrets
 import time
 from dataclasses import dataclass
@@ -38,6 +40,7 @@ CHANNELS = 2
 FRAME_MS = 20
 BYTES_PER_SAMPLE = 2
 FRAME_BYTES = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_MS // 1000
+PCM_SILENCE = b"\x00" * FRAME_BYTES
 OPUS_SILENCE = b"\xf8\xff\xfe"
 STREAM_VOICE = 0
 STREAM_SOUNDBOARD = 1
@@ -133,6 +136,39 @@ class KikiWebVoiceRecvClient(voice_recv.VoiceRecvClient):
         self._reader.start()
 
 
+class KikiWebWebAudioSource(discord.AudioSource):
+    """A short PCM buffer used to play browser microphone audio into Discord."""
+
+    def __init__(self) -> None:
+        self.frames: queue.Queue[bytes] = queue.Queue(maxsize=50)
+
+    def is_opus(self) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        try:
+            return self.frames.get(timeout=FRAME_MS / 1000)
+        except queue.Empty:
+            return PCM_SILENCE
+
+    def feed(self, pcm: bytes) -> None:
+        for offset in range(0, len(pcm), FRAME_BYTES):
+            frame = pcm[offset : offset + FRAME_BYTES]
+            if len(frame) != FRAME_BYTES:
+                continue
+            if self.frames.full():
+                with contextlib.suppress(queue.Empty):
+                    self.frames.get_nowait()
+            self.frames.put_nowait(frame)
+
+    def clear(self) -> None:
+        while True:
+            try:
+                self.frames.get_nowait()
+            except queue.Empty:
+                return
+
+
 class KikiWebAudioSink(voice_recv.AudioSink):
     def __init__(self, relay: "KikiWebVoiceRelay") -> None:
         super().__init__()
@@ -143,7 +179,14 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         return False
 
     def write(self, user: Optional[discord.abc.User], data: voice_recv.VoiceData) -> None:
+        bot_user = getattr(getattr(self.relay.voice_client, "client", None), "user", None)
         packet = getattr(data, "packet", None)
+        source_user_id = user.id if user is not None else None
+        if source_user_id is None and packet is not None and self.relay.voice_client is not None:
+            source_user_id = self.relay.voice_client._get_id_from_ssrc(packet.ssrc)
+        if bot_user is not None and source_user_id == bot_user.id:
+            return
+
         raw_source_id = user.id if user is not None else getattr(packet, "ssrc", 0)
         source_id = int(raw_source_id or 0)
         pcm = getattr(data, "pcm", None)
@@ -178,6 +221,7 @@ class KikiWebVoiceRelay:
         self.socket: Optional[aiohttp.ClientWebSocketResponse] = None
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=config.queue_size)
         self.sender_task: Optional[asyncio.Task[None]] = None
+        self.incoming_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
         self.listen_watchdog_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_lock = asyncio.Lock()
@@ -189,6 +233,7 @@ class KikiWebVoiceRelay:
         self.server_name = ""
         self.channel_id = 0
         self.channel_name = ""
+        self.web_audio_source = KikiWebWebAudioSource()
 
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         self.loop = asyncio.get_running_loop()
@@ -215,11 +260,11 @@ class KikiWebVoiceRelay:
             voice_client = channel.guild.voice_client
             if not isinstance(voice_client, KikiWebVoiceRecvClient):
                 await voice_client.disconnect(force=True)
-                voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=True)
+                voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
             elif getattr(voice_client.channel, "id", None) != channel.id:
                 await voice_client.move_to(channel)
         else:
-            voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=True)
+            voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
 
         self.voice_client = voice_client
         await self._start_listening()
@@ -242,6 +287,11 @@ class KikiWebVoiceRelay:
             self.sender_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.sender_task
+
+        if self.incoming_task:
+            self.incoming_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.incoming_task
 
         if self.listen_restart_task:
             self.listen_restart_task.cancel()
@@ -266,6 +316,8 @@ class KikiWebVoiceRelay:
         self.sender_task = None
         self.listen_restart_task = None
         self.listen_watchdog_task = None
+        self.incoming_task = None
+        self.stop_web_audio()
         self.clear_audio_queue()
 
     def note_voice_packet(self) -> None:
@@ -290,6 +342,40 @@ class KikiWebVoiceRelay:
                 self.queue.task_done()
             except asyncio.QueueEmpty:
                 break
+
+    def play_web_audio(self, pcm: bytes) -> None:
+        if (
+            self.closed.is_set()
+            or len(pcm) == 0
+            or len(pcm) % FRAME_BYTES != 0
+            or not self.voice_client
+            or not self.voice_client.is_connected()
+        ):
+            return
+
+        self.web_audio_source.feed(pcm)
+        if not self.voice_client.is_playing():
+            try:
+                self.voice_client.play(self.web_audio_source)
+            except discord.ClientException:
+                LOGGER.warning("KikiWeb could not start browser microphone playback in Discord.")
+
+    def stop_web_audio(self) -> None:
+        self.web_audio_source.clear()
+        if self.voice_client and self.voice_client.is_playing():
+            self.voice_client.stop()
+
+    async def _incoming_loop(self, socket: aiohttp.ClientWebSocketResponse) -> None:
+        async for message in socket:
+            if message.type == aiohttp.WSMsgType.BINARY:
+                self.play_web_audio(bytes(message.data))
+            elif message.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    payload = json.loads(message.data)
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("type") == "talk-stop":
+                    self.stop_web_audio()
 
     def _enqueue_pcm_in_loop(
         self,
@@ -482,6 +568,10 @@ class KikiWebVoiceRelay:
                     max_msg_size=0,
                 ) as socket:
                     self.socket = socket
+                    self.incoming_task = asyncio.create_task(
+                        self._incoming_loop(socket),
+                        name=f"kikiweb-browser-mic-{self.server_id}",
+                    )
                     LOGGER.info("KikiWeb relay connected")
                     next_status_at = 0.0
 
@@ -513,6 +603,12 @@ class KikiWebVoiceRelay:
                 LOGGER.exception("KikiWeb relay connection failed")
                 await asyncio.sleep(self.config.reconnect_delay)
             finally:
+                if self.incoming_task:
+                    self.incoming_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self.incoming_task
+                self.incoming_task = None
+                self.stop_web_audio()
                 self.socket = None
 
 

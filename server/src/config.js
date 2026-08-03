@@ -30,4 +30,5 @@ export const config = {
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   listenToken: process.env.LISTEN_TOKEN ?? '',
   ingestToken: process.env.INGEST_TOKEN ?? '',
+  talkToken: process.env.TALK_TOKEN ?? '',
 };

@@ -164,3 +164,27 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 }
 
 registerProcessor("kikiweb-pcm-player", KikiWebPcmPlayer);
+
+class KikiWebPcmCapture extends AudioWorkletProcessor {
+  process(inputs, outputs) {
+    const input = inputs[0];
+    const output = outputs[0];
+    const left = input?.[0];
+    const right = input?.[1] || left;
+
+    if (left && right) {
+      const pcm = new Int16Array(left.length * 2);
+      for (let index = 0; index < left.length; index += 1) {
+        pcm[index * 2] = Math.max(-1, Math.min(1, left[index])) * 32767;
+        pcm[index * 2 + 1] = Math.max(-1, Math.min(1, right[index])) * 32767;
+      }
+      this.port.postMessage({ type: "pcm", buffer: pcm.buffer }, [pcm.buffer]);
+    }
+
+    // Keep this node connected without returning the microphone to local speakers.
+    for (const channel of output || []) channel.fill(0);
+    return true;
+  }
+}
+
+registerProcessor("kikiweb-pcm-capture", KikiWebPcmCapture);

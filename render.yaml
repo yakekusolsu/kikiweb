@@ -16,3 +16,5 @@ services:
         sync: false
       - key: LISTEN_TOKEN
         sync: false
+      - key: TALK_TOKEN
+        sync: false
