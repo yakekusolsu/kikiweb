@@ -39,7 +39,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://kikiweb.onre
 const LISTEN_TOKEN = import.meta.env.VITE_LISTEN_TOKEN || '';
 const WEBSITE_URL = import.meta.env.VITE_WEBSITE_URL || 'https://kikiweb-seven.vercel.app';
 const BROWSER_LABEL = import.meta.env.VITE_BROWSER_LABEL || 'Chrome Side Panel';
-const INVITE_URL = 'https://discord.com/oauth2/authorize?client_id=1498176090072678521';
+const INVITE_URL = 'https://discord.com/oauth2/authorize?client_id=1531898882286551130';
 
 const status = ref<ApiStatus | null>(null);
 const statusError = ref('');

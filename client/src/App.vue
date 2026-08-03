@@ -618,7 +618,7 @@ onBeforeUnmount(() => {
         </button>
         <a
           class="invite-link"
-          href="https://discord.com/oauth2/authorize?client_id=1498176090072678521"
+          href="https://discord.com/oauth2/authorize?client_id=1531898882286551130"
           target="_blank"
           rel="noreferrer"
         >
