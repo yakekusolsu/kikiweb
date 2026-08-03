@@ -58,6 +58,11 @@ const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('
 const talkError = ref('');
 const storedTalkGain = Number(window.localStorage.getItem('kikiweb-talk-gain'));
 const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(8.5, Math.max(1, storedTalkGain)) : 2.5);
+const storedTalkSensitivity = Number(window.localStorage.getItem('kikiweb-talk-sensitivity'));
+const talkSensitivity = ref(
+  Number.isFinite(storedTalkSensitivity) ? Math.min(10, Math.max(1, storedTalkSensitivity)) : 8,
+);
+const talkNoiseGateThreshold = computed(() => Math.max(0.002, 0.018 - talkSensitivity.value * 0.0018));
 
 const secretSequence = [
   'home',
@@ -397,7 +402,10 @@ const startTalking = async () => {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
-      processorOptions: { noiseGateThreshold: 0.012, speechGain: talkGain.value },
+      processorOptions: {
+        noiseGateThreshold: talkNoiseGateThreshold.value,
+        speechGain: talkGain.value,
+      },
     });
     talkCaptureNode.port.onmessage = (event) => {
       if (event.data?.type === 'pcm' && event.data.buffer) {
@@ -499,6 +507,16 @@ watch(talkGain, (value) => {
   }
   window.localStorage.setItem('kikiweb-talk-gain', String(normalized));
   talkCaptureNode?.port.postMessage({ type: 'speech-gain', value: normalized });
+});
+
+watch(talkSensitivity, (value) => {
+  const normalized = Math.min(10, Math.max(1, Math.round(Number(value) || 1)));
+  if (value !== normalized) {
+    talkSensitivity.value = normalized;
+    return;
+  }
+  window.localStorage.setItem('kikiweb-talk-sensitivity', String(normalized));
+  talkCaptureNode?.port.postMessage({ type: 'noise-gate', value: talkNoiseGateThreshold.value });
 });
 
 watch(currentPage, (page) => {
@@ -652,6 +670,11 @@ onBeforeUnmount(() => {
       <label v-if="talkUnlocked" class="field">
         <span>マイク送話音量 {{ talkGain.toFixed(1) }}x</span>
         <input v-model.number="talkGain" min="1" max="8.5" step="0.1" type="range" />
+      </label>
+
+      <label v-if="talkUnlocked" class="field">
+        <span>マイク感度 {{ talkSensitivity }}</span>
+        <input v-model.number="talkSensitivity" min="1" max="10" step="1" type="range" />
       </label>
 
       <div class="audio-meter" aria-live="polite">

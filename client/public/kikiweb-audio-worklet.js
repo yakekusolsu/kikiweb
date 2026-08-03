@@ -170,7 +170,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     super();
     this.noiseGateThreshold = Math.max(
       0,
-      Math.min(0.1, Number(options?.processorOptions?.noiseGateThreshold) || 0.012),
+      Math.min(0.1, Number(options?.processorOptions?.noiseGateThreshold) || 0.0036),
     );
     this.speechGain = Math.max(
       1,
@@ -179,8 +179,12 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.gateGain = 0;
     this.gateHoldFrames = 0;
     this.port.onmessage = (event) => {
-      if (event.data?.type !== "speech-gain") return;
-      this.speechGain = Math.max(1, Math.min(8.5, Number(event.data.value) || 1));
+      if (event.data?.type === "speech-gain") {
+        this.speechGain = Math.max(1, Math.min(8.5, Number(event.data.value) || 1));
+      }
+      if (event.data?.type === "noise-gate") {
+        this.noiseGateThreshold = Math.max(0.002, Math.min(0.03, Number(event.data.value) || 0.0036));
+      }
     };
   }
 
