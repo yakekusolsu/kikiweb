@@ -176,8 +176,18 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       1,
       Math.min(8.5, Number(options?.processorOptions?.speechGain) || 2.5),
     );
+    this.pitch = Math.max(0.7, Math.min(1.5, Number(options?.processorOptions?.pitch) || 1));
     this.gateGain = 0;
     this.gateHoldFrames = 0;
+    this.ringSize = 16_384;
+    this.ringMask = this.ringSize - 1;
+    this.leftRing = new Float32Array(this.ringSize);
+    this.rightRing = new Float32Array(this.ringSize);
+    this.writePosition = 0;
+    this.outputPosition = 0;
+    this.latencyFrames = 4_096;
+    this.grainHop = 512;
+    this.grainSize = this.grainHop * 2;
     this.port.onmessage = (event) => {
       if (event.data?.type === "speech-gain") {
         this.speechGain = Math.max(1, Math.min(8.5, Number(event.data.value) || 1));
@@ -185,7 +195,37 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       if (event.data?.type === "noise-gate") {
         this.noiseGateThreshold = Math.max(0.002, Math.min(0.03, Number(event.data.value) || 0.0036));
       }
+      if (event.data?.type === "pitch") {
+        this.pitch = Math.max(0.7, Math.min(1.5, Number(event.data.value) || 1));
+      }
     };
+  }
+
+  readRing(buffer, position) {
+    if (position < 0 || position < this.writePosition - this.ringSize + 1 || position > this.writePosition - 2) {
+      return 0;
+    }
+    const lower = Math.floor(position);
+    const fraction = position - lower;
+    const current = buffer[lower & this.ringMask];
+    const next = buffer[(lower + 1) & this.ringMask];
+    return current + (next - current) * fraction;
+  }
+
+  grainSample(buffer, outputPosition, grainStart) {
+    const grainOffset = outputPosition - grainStart;
+    if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
+    const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
+    const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch;
+    return this.readRing(buffer, sourcePosition) * window;
+  }
+
+  pitchShiftedSample(buffer) {
+    const grainStart = Math.floor(this.outputPosition / this.grainHop) * this.grainHop;
+    return (
+      this.grainSample(buffer, this.outputPosition, grainStart - this.grainHop) +
+      this.grainSample(buffer, this.outputPosition, grainStart)
+    );
   }
 
   process(inputs, outputs) {
@@ -198,6 +238,9 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       let sum = 0;
       for (let index = 0; index < left.length; index += 1) {
         sum += (left[index] * left[index] + right[index] * right[index]) / 2;
+        this.leftRing[this.writePosition & this.ringMask] = left[index];
+        this.rightRing[this.writePosition & this.ringMask] = right[index];
+        this.writePosition += 1;
       }
       const rms = Math.sqrt(sum / left.length);
       if (rms >= this.noiseGateThreshold) {
@@ -211,10 +254,11 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
 
       const pcm = new Int16Array(left.length * 2);
       for (let index = 0; index < left.length; index += 1) {
-        const leftSample = Math.tanh(left[index] * this.gateGain * this.speechGain);
-        const rightSample = Math.tanh(right[index] * this.gateGain * this.speechGain);
+        const leftSample = Math.tanh(this.pitchShiftedSample(this.leftRing) * this.gateGain * this.speechGain);
+        const rightSample = Math.tanh(this.pitchShiftedSample(this.rightRing) * this.gateGain * this.speechGain);
         pcm[index * 2] = leftSample * 32767;
         pcm[index * 2 + 1] = rightSample * 32767;
+        this.outputPosition += 1;
       }
       this.port.postMessage({ type: "pcm", buffer: pcm.buffer }, [pcm.buffer]);
     }

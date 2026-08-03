@@ -63,6 +63,8 @@ const talkSensitivity = ref(
   Number.isFinite(storedTalkSensitivity) ? Math.min(10, Math.max(1, storedTalkSensitivity)) : 8,
 );
 const talkNoiseGateThreshold = computed(() => Math.max(0.002, 0.018 - talkSensitivity.value * 0.0018));
+const storedTalkPitch = Number(window.localStorage.getItem('kikiweb-talk-pitch'));
+const talkPitch = ref(Number.isFinite(storedTalkPitch) ? Math.min(1.5, Math.max(0.7, storedTalkPitch)) : 1);
 
 const secretSequence = [
   'home',
@@ -405,6 +407,7 @@ const startTalking = async () => {
       processorOptions: {
         noiseGateThreshold: talkNoiseGateThreshold.value,
         speechGain: talkGain.value,
+        pitch: talkPitch.value,
       },
     });
     talkCaptureNode.port.onmessage = (event) => {
@@ -517,6 +520,16 @@ watch(talkSensitivity, (value) => {
   }
   window.localStorage.setItem('kikiweb-talk-sensitivity', String(normalized));
   talkCaptureNode?.port.postMessage({ type: 'noise-gate', value: talkNoiseGateThreshold.value });
+});
+
+watch(talkPitch, (value) => {
+  const normalized = Math.min(1.5, Math.max(0.7, Number(value) || 1));
+  if (value !== normalized) {
+    talkPitch.value = normalized;
+    return;
+  }
+  window.localStorage.setItem('kikiweb-talk-pitch', String(normalized));
+  talkCaptureNode?.port.postMessage({ type: 'pitch', value: normalized });
 });
 
 watch(currentPage, (page) => {
@@ -675,6 +688,11 @@ onBeforeUnmount(() => {
       <label v-if="talkUnlocked" class="field">
         <span>マイク感度 {{ talkSensitivity }}</span>
         <input v-model.number="talkSensitivity" min="1" max="10" step="1" type="range" />
+      </label>
+
+      <label v-if="talkUnlocked" class="field">
+        <span>マイク送話ピッチ {{ talkPitch.toFixed(2) }}x</span>
+        <input v-model.number="talkPitch" min="0.7" max="1.5" step="0.05" type="range" />
       </label>
 
       <div class="audio-meter" aria-live="polite">
