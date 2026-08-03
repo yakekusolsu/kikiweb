@@ -47,6 +47,18 @@ install_kikiweb_commands(
 `!kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`!kikiweb_leave` で停止します。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 
+### KikiWeb 専用 Bot
+
+既存Botへ組み込まず、KikiWebだけを動かす場合は`bot_embed/kikiweb_bot.py`と
+`bot_embed/kikiweb_voice.py`を同じフォルダへ置き、`kikiweb_bot.py`を`main.py`として起動します。
+追加の`dotenv`パッケージは不要です。`/home/container/.env`へ以下を設定してください。
+
+```dotenv
+DISCORD_TOKEN=Discord Bot token
+KIKIWEB_RELAY_URL=wss://kikiweb.onrender.com/ingest
+KIKIWEB_INGEST_TOKEN=Render の INGEST_TOKEN と同じ値
+```
+
 ブラウザからVCへ送話する場合は、BotにVCでの「発言」権限を与え、最新版の`kikiweb_voice.py`へ更新後に
 一度`!kikiweb_leave`してから`!kikiweb_join`してください。既に接続済みのBotは、再接続するまでミュート状態が
 更新されません。
