@@ -56,6 +56,8 @@ const talkUnlocked = ref(
 );
 const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('idle');
 const talkError = ref('');
+const storedTalkGain = Number(window.localStorage.getItem('kikiweb-talk-gain'));
+const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(4, Math.max(1, storedTalkGain)) : 2.5);
 
 const secretSequence = [
   'home',
@@ -395,7 +397,7 @@ const startTalking = async () => {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
-      processorOptions: { noiseGateThreshold: 0.012, speechGain: 2.5 },
+      processorOptions: { noiseGateThreshold: 0.012, speechGain: talkGain.value },
     });
     talkCaptureNode.port.onmessage = (event) => {
       if (event.data?.type === 'pcm' && event.data.buffer) {
@@ -488,6 +490,16 @@ watch(selectedServerId, (value, previousValue) => {
 });
 
 watch(theme, saveTheme);
+
+watch(talkGain, (value) => {
+  const normalized = Math.min(4, Math.max(1, Number(value) || 1));
+  if (value !== normalized) {
+    talkGain.value = normalized;
+    return;
+  }
+  window.localStorage.setItem('kikiweb-talk-gain', String(normalized));
+  talkCaptureNode?.port.postMessage({ type: 'speech-gain', value: normalized });
+});
 
 watch(currentPage, (page) => {
   if (page !== 'home' && (talkState.value === 'talking' || talkState.value === 'connecting')) {
@@ -635,6 +647,11 @@ onBeforeUnmount(() => {
         <span>サウンドボード</span>
         <input v-model="soundboardEnabled" type="checkbox" role="switch" />
         <strong>{{ soundboardEnabled ? 'ON' : 'OFF' }}</strong>
+      </label>
+
+      <label v-if="talkUnlocked" class="field">
+        <span>マイク送話音量 {{ talkGain.toFixed(1) }}x</span>
+        <input v-model.number="talkGain" min="1" max="4" step="0.1" type="range" />
       </label>
 
       <div class="audio-meter" aria-live="polite">

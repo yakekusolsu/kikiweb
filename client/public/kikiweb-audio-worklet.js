@@ -178,6 +178,10 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     );
     this.gateGain = 0;
     this.gateHoldFrames = 0;
+    this.port.onmessage = (event) => {
+      if (event.data?.type !== "speech-gain") return;
+      this.speechGain = Math.max(1, Math.min(4, Number(event.data.value) || 1));
+    };
   }
 
   process(inputs, outputs) {
