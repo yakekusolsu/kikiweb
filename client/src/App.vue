@@ -395,7 +395,7 @@ const startTalking = async () => {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
-      processorOptions: { noiseGateThreshold: 0.012 },
+      processorOptions: { noiseGateThreshold: 0.012, speechGain: 2.5 },
     });
     talkCaptureNode.port.onmessage = (event) => {
       if (event.data?.type === 'pcm' && event.data.buffer) {

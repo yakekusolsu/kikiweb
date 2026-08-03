@@ -172,6 +172,10 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       0,
       Math.min(0.1, Number(options?.processorOptions?.noiseGateThreshold) || 0.012),
     );
+    this.speechGain = Math.max(
+      1,
+      Math.min(4, Number(options?.processorOptions?.speechGain) || 2.5),
+    );
     this.gateGain = 0;
     this.gateHoldFrames = 0;
   }
@@ -199,8 +203,10 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
 
       const pcm = new Int16Array(left.length * 2);
       for (let index = 0; index < left.length; index += 1) {
-        pcm[index * 2] = Math.max(-1, Math.min(1, left[index] * this.gateGain)) * 32767;
-        pcm[index * 2 + 1] = Math.max(-1, Math.min(1, right[index] * this.gateGain)) * 32767;
+        const leftSample = Math.tanh(left[index] * this.gateGain * this.speechGain);
+        const rightSample = Math.tanh(right[index] * this.gateGain * this.speechGain);
+        pcm[index * 2] = leftSample * 32767;
+        pcm[index * 2 + 1] = rightSample * 32767;
       }
       this.port.postMessage({ type: "pcm", buffer: pcm.buffer }, [pcm.buffer]);
     }
