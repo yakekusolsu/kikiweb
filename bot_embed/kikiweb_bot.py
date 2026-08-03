@@ -43,7 +43,6 @@ if not discord_token:
     raise RuntimeError("DISCORD_TOKEN is required. Set it in /home/container/.env.")
 
 intents = discord.Intents.default()
-intents.message_content = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -52,11 +51,24 @@ install_kikiweb_commands(
     bot,
     relay_url=relay_url,
     ingest_token=ingest_token,
+    use_slash_commands=True,
 )
+
+commands_synced = False
 
 
 @bot.event
 async def on_ready() -> None:
+    global commands_synced
+    if not commands_synced:
+        guild_id = os.getenv("DISCORD_GUILD_ID", "").strip()
+        if guild_id:
+            guild = discord.Object(id=int(guild_id))
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+        else:
+            await bot.tree.sync()
+        commands_synced = True
     print(f"KikiWeb Bot is ready: {bot.user} ({bot.user.id})")
 
 

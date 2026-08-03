@@ -657,22 +657,50 @@ def install_kikiweb_commands(
     relay_url: str,
     ingest_token: str = "",
     command_prefix: str = "kikiweb",
+    use_slash_commands: bool = False,
 ) -> KikiWebRelayManager:
     manager = KikiWebRelayManager(KikiWebConfig(relay_url=relay_url, ingest_token=ingest_token))
 
-    @bot.command(name=f"{command_prefix}_join")
-    async def kikiweb_join(ctx):
-        if not ctx.author.voice or not ctx.author.voice.channel:
-            await ctx.reply("VC に入ってから実行してください。")
-            return
+    if use_slash_commands:
+        tree = getattr(bot, "tree", None)
+        if tree is None:
+            raise RuntimeError("Slash commands require commands.Bot or a bot with a CommandTree.")
 
-        await manager.connect(ctx.author.voice.channel)
-        await ctx.reply("KikiWeb への音声中継を開始しました。")
+        @tree.command(name=f"{command_prefix}_join", description="参加中のVCをKikiWebへ中継します")
+        async def kikiweb_join(interaction: discord.Interaction) -> None:
+            member = interaction.user
+            voice = getattr(member, "voice", None)
+            if not interaction.guild or not voice or not voice.channel:
+                await interaction.response.send_message("VC に入ってから実行してください。", ephemeral=True)
+                return
 
-    @bot.command(name=f"{command_prefix}_leave")
-    async def kikiweb_leave(ctx):
-        await manager.disconnect(ctx.guild.id)
-        await ctx.reply("KikiWeb への音声中継を停止しました。")
+            await interaction.response.defer(thinking=True)
+            await manager.connect(voice.channel)
+            await interaction.followup.send("KikiWeb への音声中継を開始しました。")
+
+        @tree.command(name=f"{command_prefix}_leave", description="KikiWebのVC音声中継を停止します")
+        async def kikiweb_leave(interaction: discord.Interaction) -> None:
+            if not interaction.guild:
+                await interaction.response.send_message("サーバー内で実行してください。", ephemeral=True)
+                return
+
+            await manager.disconnect(interaction.guild.id)
+            await interaction.response.send_message("KikiWeb への音声中継を停止しました。")
+    else:
+
+        @bot.command(name=f"{command_prefix}_join")
+        async def kikiweb_join(ctx):
+            if not ctx.author.voice or not ctx.author.voice.channel:
+                await ctx.reply("VC に入ってから実行してください。")
+                return
+
+            await manager.connect(ctx.author.voice.channel)
+            await ctx.reply("KikiWeb への音声中継を開始しました。")
+
+        @bot.command(name=f"{command_prefix}_leave")
+        async def kikiweb_leave(ctx):
+            await manager.disconnect(ctx.guild.id)
+            await ctx.reply("KikiWeb への音声中継を停止しました。")
 
     @bot.listen("on_voice_channel_effect")
     async def kikiweb_soundboard(effect):

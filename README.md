@@ -57,7 +57,11 @@ VCで発話するBotの音声も受信するため、Shovelなどの読み上げ
 DISCORD_TOKEN=Discord Bot token
 KIKIWEB_RELAY_URL=wss://kikiweb.onrender.com/ingest
 KIKIWEB_INGEST_TOKEN=Render の INGEST_TOKEN と同じ値
+DISCORD_GUILD_ID=コマンドをすぐ反映したいサーバーID
 ```
+
+専用Botでは`/kikiweb_join`で開始、`/kikiweb_leave`で停止します。`DISCORD_GUILD_ID`を設定すると
+スラッシュコマンドがそのサーバーへすぐ反映されます。設定しない場合はDiscord側のグローバル反映に時間がかかることがあります。
 
 ブラウザからVCへ送話する場合は、BotにVCでの「発言」権限を与え、最新版の`kikiweb_voice.py`へ更新後に
 一度`!kikiweb_leave`してから`!kikiweb_join`してください。既に接続済みのBotは、再接続するまでミュート状態が
