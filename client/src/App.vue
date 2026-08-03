@@ -50,7 +50,10 @@ const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') 
 const selectedServerId = ref(window.localStorage.getItem('kikiweb-server-id') || '');
 const route = ref(window.location.hash || '#/');
 const theme = ref<Theme>(getInitialTheme());
-const talkUnlocked = ref(window.sessionStorage.getItem('kikiweb-talk-unlocked') === '1');
+const talkUnlocked = ref(
+  window.sessionStorage.getItem('kikiweb-talk-unlocked') === '1' ||
+    window.localStorage.getItem('kikiweb-talk-unlocked') === '1',
+);
 const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('idle');
 const talkError = ref('');
 
@@ -126,6 +129,7 @@ const recordSecretAction = (action: string) => {
     if (secretSequenceIndex === secretSequence.length) {
       talkUnlocked.value = true;
       window.sessionStorage.setItem('kikiweb-talk-unlocked', '1');
+      window.localStorage.setItem('kikiweb-talk-unlocked', '1');
       secretSequenceIndex = 0;
     }
     return;
@@ -510,7 +514,7 @@ onBeforeUnmount(() => {
     </nav>
 
     <section v-if="currentPage === 'home'" class="listen-panel">
-      <div class="brand-row">
+      <div class="brand-row" @click="recordSecretAction('home')">
         <img class="mark" src="/favicon.svg" alt="" aria-hidden="true" />
         <div>
           <p class="eyebrow">Discord VC listen-only relay</p>
