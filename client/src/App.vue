@@ -73,7 +73,9 @@ const secretSequence = [
   'theme',
   'home',
 ];
+const secretTimeoutMs = 30_000;
 let secretSequenceIndex = 0;
+let secretSequenceStartedAt = 0;
 
 let socket: WebSocket | null = null;
 let audioContext: AudioContext | null = null;
@@ -124,18 +126,30 @@ const themeButtonLabel = computed(() =>
 const recordSecretAction = (action: string) => {
   if (talkUnlocked.value) return;
 
+  const now = Date.now();
+  if (
+    secretSequenceIndex > 0 &&
+    now - secretSequenceStartedAt > secretTimeoutMs
+  ) {
+    secretSequenceIndex = 0;
+    secretSequenceStartedAt = 0;
+  }
+
   if (action === secretSequence[secretSequenceIndex]) {
+    if (secretSequenceIndex === 0) secretSequenceStartedAt = now;
     secretSequenceIndex += 1;
     if (secretSequenceIndex === secretSequence.length) {
       talkUnlocked.value = true;
       window.sessionStorage.setItem('kikiweb-talk-unlocked', '1');
       window.localStorage.setItem('kikiweb-talk-unlocked', '1');
       secretSequenceIndex = 0;
+      secretSequenceStartedAt = 0;
     }
     return;
   }
 
   secretSequenceIndex = action === secretSequence[0] ? 1 : 0;
+  secretSequenceStartedAt = secretSequenceIndex === 1 ? now : 0;
 };
 
 const toggleTheme = () => {
