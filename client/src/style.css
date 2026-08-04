@@ -324,6 +324,52 @@ h2 {
   font-size: 0.95rem;
 }
 
+.guide-invite {
+  margin-top: 14px;
+}
+
+.guide-steps,
+.guide-checks {
+  margin: 18px 0 0;
+  padding-left: 24px;
+  color: var(--text);
+}
+
+.guide-steps {
+  display: grid;
+  gap: 16px;
+}
+
+.guide-steps li,
+.guide-checks li {
+  padding-left: 5px;
+}
+
+.guide-steps li::marker {
+  color: var(--primary);
+  font-weight: 800;
+}
+
+.guide-steps strong,
+.guide-steps span {
+  display: block;
+}
+
+.guide-steps strong {
+  margin-bottom: 4px;
+  color: var(--ink);
+}
+
+.guide-steps span,
+.guide-checks li {
+  line-height: 1.75;
+}
+
+.guide-checks {
+  display: grid;
+  gap: 8px;
+}
+
 .link-list {
   display: grid;
   gap: 12px;

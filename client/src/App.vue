@@ -112,6 +112,7 @@ const resumeAudio = () => {
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
 const currentPage = computed(() => {
+  if (route.value === '#/guide') return 'guide';
   if (route.value === '#/terms') return 'terms';
   if (route.value === '#/privacy') return 'privacy';
   if (route.value === '#/links') return 'links';
@@ -580,6 +581,7 @@ onBeforeUnmount(() => {
     <nav class="top-nav" aria-label="ページ">
       <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined" @click="recordSecretAction('home')">KikiWeb</a>
       <div>
+        <a href="#/guide" :aria-current="currentPage === 'guide' ? 'page' : undefined">Bot導入・使い方</a>
         <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined" @click="recordSecretAction('links')">リンク</a>
         <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined" @click="recordSecretAction('terms')">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
@@ -731,6 +733,62 @@ onBeforeUnmount(() => {
       <p v-if="statusError" class="error">Status API: {{ statusError }}</p>
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
+
+    <article v-if="currentPage === 'guide'" class="document-panel guide-panel">
+      <p class="eyebrow">Getting Started</p>
+      <h1>Bot導入・使い方</h1>
+      <p class="updated">KikiWeb Botをサーバーに追加して、VCの音声を聞くまでの手順です。</p>
+
+      <h2>1. Botをサーバーに追加</h2>
+      <p>下のボタンからDiscordを開き、追加先のサーバーを選択して認証します。</p>
+      <a
+        class="invite-link guide-invite"
+        href="https://discord.com/oauth2/authorize?client_id=1531898882286551130"
+        target="_blank"
+        rel="noreferrer"
+      >
+        この鯖にBotを入れる！
+      </a>
+
+      <ol class="guide-steps">
+        <li>
+          <strong>VC権限を確認</strong>
+          <span>Botにボイスチャンネルの「接続」と「発言」権限を付けます。</span>
+        </li>
+        <li>
+          <strong>VCへ参加</strong>
+          <span>KikiWebで聞きたいボイスチャンネルへ、自分が先に参加します。</span>
+        </li>
+        <li>
+          <strong>中継を開始</strong>
+          <span>Discordで <code>/kikiweb_join</code> を実行すると、Botが同じVCへ接続します。</span>
+        </li>
+      </ol>
+
+      <h2>2. サイトで音声を聞く</h2>
+      <ol class="guide-steps">
+        <li>
+          <strong>サーバーを選択</strong>
+          <span>トップページのDiscord serverメニューから、Botを接続したサーバーを選びます。</span>
+        </li>
+        <li>
+          <strong>再生を開始</strong>
+          <span>「聞く」を押します。ブラウザから音声再生を求められた場合は許可してください。</span>
+        </li>
+        <li>
+          <strong>中継を終了</strong>
+          <span>Discordで <code>/kikiweb_leave</code> を実行すると、BotがVCから退出します。</span>
+        </li>
+      </ol>
+
+      <h2>うまく接続できない場合</h2>
+      <ul class="guide-checks">
+        <li>Botがオンラインで、対象VCに接続しているか確認します。</li>
+        <li>Botの「チャンネルを見る」「接続」「発言」権限を確認します。</li>
+        <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
+        <li>音が出ない場合はブラウザのタブと端末の音量・ミュートを確認します。</li>
+      </ul>
+    </article>
 
     <article v-if="currentPage === 'links'" class="document-panel links-panel">
       <p class="eyebrow">Links</p>
