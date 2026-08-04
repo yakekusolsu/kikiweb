@@ -180,15 +180,16 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.voicePreset = options?.processorOptions?.voicePreset === "feminine" ? "feminine" : "normal";
     this.gateGain = 0;
     this.gateHoldFrames = 0;
-    this.ringSize = 16_384;
+    this.ringSize = 32_768;
     this.ringMask = this.ringSize - 1;
     this.leftRing = new Float32Array(this.ringSize);
     this.rightRing = new Float32Array(this.ringSize);
     this.writePosition = 0;
     this.outputPosition = 0;
-    this.latencyFrames = 4_096;
-    this.grainHop = 512;
-    this.grainSize = this.grainHop * 2;
+    this.latencyFrames = 8_192;
+    this.grainHop = 2_048;
+    this.grainOverlapCount = 2;
+    this.grainSize = this.grainHop * this.grainOverlapCount;
     this.port.onmessage = (event) => {
       if (event.data?.type === "speech-gain") {
         this.speechGain = Math.max(1, Math.min(8.5, Number(event.data.value) || 1));
@@ -220,17 +221,22 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
-    const presetPitch = this.voicePreset === "feminine" ? 1.22 : 1;
+    const presetPitch = this.voicePreset === "feminine" ? 1.14 : 1;
     const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch * presetPitch;
     return this.readRing(buffer, sourcePosition) * window;
   }
 
   pitchShiftedSample(buffer) {
     const grainStart = Math.floor(this.outputPosition / this.grainHop) * this.grainHop;
-    return (
-      this.grainSample(buffer, this.outputPosition, grainStart - this.grainHop) +
-      this.grainSample(buffer, this.outputPosition, grainStart)
-    );
+    let mixedSample = 0;
+    for (let index = 0; index < this.grainOverlapCount; index += 1) {
+      mixedSample += this.grainSample(
+        buffer,
+        this.outputPosition,
+        grainStart - this.grainHop * index,
+      );
+    }
+    return mixedSample / (this.grainOverlapCount / 2);
   }
 
   process(inputs, outputs) {
