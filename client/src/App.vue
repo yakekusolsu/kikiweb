@@ -70,6 +70,11 @@ const storedTalkPitch = Number(window.localStorage.getItem('kikiweb-talk-pitch')
 const talkPitch = ref(Number.isFinite(storedTalkPitch) ? Math.min(1.5, Math.max(0.7, storedTalkPitch)) : 1);
 const storedTalkVoicePreset = window.localStorage.getItem('kikiweb-talk-voice-preset');
 const talkVoicePreset = ref<TalkVoicePreset>(storedTalkVoicePreset === 'feminine' ? 'feminine' : 'normal');
+const talkEchoEnabled = ref(window.localStorage.getItem('kikiweb-talk-echo') === 'on');
+const storedTalkEchoAmount = Number(window.localStorage.getItem('kikiweb-talk-echo-amount'));
+const talkEchoAmount = ref(
+  Number.isFinite(storedTalkEchoAmount) ? Math.min(100, Math.max(0, storedTalkEchoAmount)) : 45,
+);
 
 const secretSequence = [
   'home',
@@ -106,6 +111,10 @@ let talkCaptureNode: AudioWorkletNode | null = null;
 let talkHighpassNode: BiquadFilterNode | null = null;
 let talkBodyNode: BiquadFilterNode | null = null;
 let talkPresenceNode: BiquadFilterNode | null = null;
+let talkDryNode: GainNode | null = null;
+let talkEchoDelayNode: DelayNode | null = null;
+let talkEchoFeedbackNode: GainNode | null = null;
+let talkEchoWetNode: GainNode | null = null;
 let talkMicStream: MediaStream | null = null;
 let talkRemainder = new Uint8Array(0);
 
@@ -125,6 +134,14 @@ const applyTalkVoicePreset = () => {
   talkBodyNode?.gain.setTargetAtTime(feminine ? -5 : 0, now, 0.02);
   talkPresenceNode?.gain.setTargetAtTime(feminine ? 4 : 0, now, 0.02);
   talkCaptureNode?.port.postMessage({ type: 'voice-preset', value: talkVoicePreset.value });
+};
+
+const applyTalkEcho = () => {
+  const now = talkAudioContext?.currentTime ?? 0;
+  const amount = Math.min(1, Math.max(0, talkEchoAmount.value / 100));
+  const enabledAmount = talkEchoEnabled.value ? amount : 0;
+  talkEchoWetNode?.gain.setTargetAtTime(enabledAmount * 0.62, now, 0.02);
+  talkEchoFeedbackNode?.gain.setTargetAtTime(enabledAmount * 0.55, now, 0.02);
 };
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
@@ -380,6 +397,14 @@ const releaseTalkResources = () => {
   talkBodyNode = null;
   talkPresenceNode?.disconnect();
   talkPresenceNode = null;
+  talkDryNode?.disconnect();
+  talkDryNode = null;
+  talkEchoDelayNode?.disconnect();
+  talkEchoDelayNode = null;
+  talkEchoFeedbackNode?.disconnect();
+  talkEchoFeedbackNode = null;
+  talkEchoWetNode?.disconnect();
+  talkEchoWetNode = null;
   talkMicStream?.getTracks().forEach((track) => track.stop());
   talkMicStream = null;
   void talkAudioContext?.close();
@@ -478,11 +503,23 @@ const startTalking = async () => {
     talkPresenceNode.type = 'peaking';
     talkPresenceNode.frequency.value = 3_200;
     talkPresenceNode.Q.value = 0.8;
+    talkDryNode = talkAudioContext.createGain();
+    talkEchoDelayNode = talkAudioContext.createDelay(1);
+    talkEchoDelayNode.delayTime.value = 0.22;
+    talkEchoFeedbackNode = talkAudioContext.createGain();
+    talkEchoWetNode = talkAudioContext.createGain();
     talkSourceNode.connect(talkHighpassNode);
     talkHighpassNode.connect(talkBodyNode);
     talkBodyNode.connect(talkPresenceNode);
-    talkPresenceNode.connect(talkCaptureNode);
+    talkPresenceNode.connect(talkDryNode);
+    talkDryNode.connect(talkCaptureNode);
+    talkPresenceNode.connect(talkEchoDelayNode);
+    talkEchoDelayNode.connect(talkEchoFeedbackNode);
+    talkEchoFeedbackNode.connect(talkEchoDelayNode);
+    talkEchoDelayNode.connect(talkEchoWetNode);
+    talkEchoWetNode.connect(talkCaptureNode);
     applyTalkVoicePreset();
+    applyTalkEcho();
     talkCaptureNode.connect(talkAudioContext.destination);
     await talkAudioContext.resume();
 
@@ -602,6 +639,21 @@ watch(talkPitch, (value) => {
 watch(talkVoicePreset, (value) => {
   window.localStorage.setItem('kikiweb-talk-voice-preset', value);
   applyTalkVoicePreset();
+});
+
+watch(talkEchoEnabled, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-echo', enabled ? 'on' : 'off');
+  applyTalkEcho();
+});
+
+watch(talkEchoAmount, (value) => {
+  const normalized = Math.min(100, Math.max(0, Math.round(Number(value) || 0)));
+  if (value !== normalized) {
+    talkEchoAmount.value = normalized;
+    return;
+  }
+  window.localStorage.setItem('kikiweb-talk-echo-amount', String(normalized));
+  applyTalkEcho();
 });
 
 watch(currentPage, (page) => {
@@ -793,6 +845,17 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </fieldset>
+
+      <label v-if="talkUnlocked" class="soundboard-toggle">
+        <span>マイクエコー</span>
+        <input v-model="talkEchoEnabled" type="checkbox" role="switch" />
+        <strong>{{ talkEchoEnabled ? 'ON' : 'OFF' }}</strong>
+      </label>
+
+      <label v-if="talkUnlocked && talkEchoEnabled" class="field">
+        <span>エコー量 {{ talkEchoAmount }}%</span>
+        <input v-model.number="talkEchoAmount" min="0" max="100" step="1" type="range" />
+      </label>
 
       <div class="audio-meter" aria-live="polite">
         <span>Buffer {{ bufferMs }}ms</span>
