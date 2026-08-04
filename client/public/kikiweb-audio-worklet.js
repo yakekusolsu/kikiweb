@@ -186,7 +186,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.rightRing = new Float32Array(this.ringSize);
     this.writePosition = 0;
     this.outputPosition = 0;
-    this.latencyFrames = 8_192;
+    this.latencyFrames = 4_096;
     this.grainHop = 2_048;
     this.grainOverlapCount = 2;
     this.grainSize = this.grainHop * this.grainOverlapCount;
