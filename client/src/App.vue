@@ -761,7 +761,7 @@ onBeforeUnmount(() => {
         </li>
         <li>
           <strong>中継を開始</strong>
-          <span>Discordで <code>/kikiweb_join</code> を実行すると、Botが同じVCへ接続します。</span>
+          <span>Discordで <code>!kikiweb_join</code> を実行すると、Botが同じVCへ接続します。</span>
         </li>
       </ol>
 
@@ -777,7 +777,7 @@ onBeforeUnmount(() => {
         </li>
         <li>
           <strong>中継を終了</strong>
-          <span>Discordで <code>/kikiweb_leave</code> を実行すると、BotがVCから退出します。</span>
+          <span>Discordで <code>!kikiweb_leave</code> を実行すると、BotがVCから退出します。</span>
         </li>
       </ol>
 
