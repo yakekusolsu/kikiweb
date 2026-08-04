@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Moon, Sun } from '@lucide/vue';
+import { ExternalLink, Moon, Sun } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
@@ -113,6 +113,7 @@ const resumeAudio = () => {
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
 const currentPage = computed(() => {
   if (route.value === '#/guide') return 'guide';
+  if (route.value === '#/extensions') return 'extensions';
   if (route.value === '#/terms') return 'terms';
   if (route.value === '#/privacy') return 'privacy';
   if (route.value === '#/links') return 'links';
@@ -582,6 +583,7 @@ onBeforeUnmount(() => {
       <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined" @click="recordSecretAction('home')">KikiWeb</a>
       <div>
         <a href="#/guide" :aria-current="currentPage === 'guide' ? 'page' : undefined">Bot導入・使い方</a>
+        <a href="#/extensions" :aria-current="currentPage === 'extensions' ? 'page' : undefined">拡張機能</a>
         <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined" @click="recordSecretAction('links')">リンク</a>
         <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined" @click="recordSecretAction('terms')">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
@@ -788,6 +790,55 @@ onBeforeUnmount(() => {
         <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
         <li>音が出ない場合はブラウザのタブと端末の音量・ミュートを確認します。</li>
       </ul>
+    </article>
+
+    <article v-if="currentPage === 'extensions'" class="document-panel extensions-panel">
+      <p class="eyebrow">Browser Extensions</p>
+      <h1>拡張機能を導入</h1>
+      <p class="updated">KikiWebをブラウザのサイドパネルから利用できます。</p>
+
+      <div class="store-links">
+        <a
+          class="store-link chrome-store-link"
+          href="https://chromewebstore.google.com/detail/kikiweb/ebddappocfjldcclnmbmapbmligjdlaj?authuser=0&amp;hl=ja"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span>
+            <small>Google Chrome</small>
+            Chrome ウェブストアで追加
+          </span>
+          <ExternalLink :size="19" aria-hidden="true" />
+        </a>
+        <a
+          class="store-link firefox-store-link"
+          href="https://addons.mozilla.org/ja/firefox/addon/kikiweb-for-firefox/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <span>
+            <small>Mozilla Firefox</small>
+            Firefoxへ追加
+          </span>
+          <ExternalLink :size="19" aria-hidden="true" />
+        </a>
+      </div>
+
+      <h2>導入後の開き方</h2>
+      <ol class="guide-steps">
+        <li>
+          <strong>ストアから追加</strong>
+          <span>使用中のブラウザに合うストアを開き、拡張機能の追加を承認します。</span>
+        </li>
+        <li>
+          <strong>KikiWebを開く</strong>
+          <span>ブラウザの拡張機能メニューからKikiWebを選ぶと、サイドパネルが開きます。</span>
+        </li>
+        <li>
+          <strong>サーバーを選んで聞く</strong>
+          <span>BotがVCへ接続しているサーバーを選び、「聞く」を押します。</span>
+        </li>
+      </ol>
     </article>
 
     <article v-if="currentPage === 'links'" class="document-panel links-panel">

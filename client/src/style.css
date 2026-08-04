@@ -370,6 +370,62 @@ h2 {
   gap: 8px;
 }
 
+.store-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.store-link {
+  min-width: 0;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-weight: 800;
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.store-link:hover {
+  transform: translateY(-1px);
+  background: var(--surface-strong);
+}
+
+.chrome-store-link:hover {
+  border-color: var(--primary);
+}
+
+.firefox-store-link:hover {
+  border-color: var(--coral);
+}
+
+.store-link span,
+.store-link small {
+  display: block;
+}
+
+.store-link span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.store-link small {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .link-list {
   display: grid;
   gap: 12px;
@@ -653,6 +709,10 @@ h2 {
 
   .status-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .store-links {
+    grid-template-columns: 1fr;
   }
 
   .server-picker {
