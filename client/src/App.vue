@@ -8,6 +8,7 @@ type ServerStatus = {
   name: string;
   channelId: string;
   channelName: string;
+  voiceStatus: string;
   state: string;
   listeners: number;
   activeSpeakers: number;
@@ -622,13 +623,16 @@ onBeforeUnmount(() => {
             </option>
           </select>
         </label>
-        <p>
-          {{
-            selectedServer
-              ? `${selectedServer.channelName} / ${selectedServer.state === 'ready' ? '配信中' : 'Bot接続待ち'}`
-              : 'Botからの接続を待っています'
-          }}
-        </p>
+        <div class="server-summary">
+          <p>
+            {{
+              selectedServer
+                ? `${selectedServer.channelName} / ${selectedServer.state === 'ready' ? '配信中' : 'Bot接続待ち'}`
+                : 'Botからの接続を待っています'
+            }}
+          </p>
+          <span v-if="selectedServer?.voiceStatus" class="voice-status">{{ selectedServer.voiceStatus }}</span>
+        </div>
       </div>
 
       <div class="status-strip">
@@ -755,7 +759,7 @@ onBeforeUnmount(() => {
       <ol class="guide-steps">
         <li>
           <strong>VC権限を確認</strong>
-          <span>Botにボイスチャンネルの「接続」と「発言」権限を付けます。</span>
+          <span>Botにボイスチャンネルの「接続」「発言」「ステータスを設定」権限を付けます。</span>
         </li>
         <li>
           <strong>VCへ参加</strong>
@@ -786,7 +790,7 @@ onBeforeUnmount(() => {
       <h2>うまく接続できない場合</h2>
       <ul class="guide-checks">
         <li>Botがオンラインで、対象VCに接続しているか確認します。</li>
-        <li>Botの「チャンネルを見る」「接続」「発言」権限を確認します。</li>
+        <li>Botの「チャンネルを見る」「接続」「発言」「ステータスを設定」権限を確認します。</li>
         <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
         <li>音が出ない場合はブラウザのタブと端末の音量・ミュートを確認します。</li>
       </ul>

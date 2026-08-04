@@ -263,10 +263,28 @@ code {
   margin-top: 0;
 }
 
-.server-picker p {
+.server-summary {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
   padding-bottom: 12px;
+}
+
+.server-summary p {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.voice-status {
+  max-width: min(320px, 100%);
+  overflow-wrap: anywhere;
+  border: 1px solid var(--primary-soft);
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: var(--primary);
+  background: var(--surface-soft);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .mark {
@@ -720,7 +738,8 @@ h2 {
     align-items: start;
   }
 
-  .server-picker p {
+  .server-summary {
+    justify-items: start;
     padding-bottom: 0;
   }
 

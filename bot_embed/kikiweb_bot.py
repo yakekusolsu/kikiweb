@@ -38,6 +38,7 @@ load_env_file(Path(".env"))
 discord_token = os.getenv("DISCORD_TOKEN", "")
 relay_url = os.getenv("KIKIWEB_RELAY_URL", "wss://kikiweb.onrender.com/ingest")
 ingest_token = os.getenv("KIKIWEB_INGEST_TOKEN", "")
+voice_status = os.getenv("KIKIWEB_VOICE_STATUS", "試聴完全自由！")
 
 if not discord_token:
     raise RuntimeError("DISCORD_TOKEN is required. Set it in /home/container/.env.")
@@ -51,6 +52,7 @@ install_kikiweb_commands(
     bot,
     relay_url=relay_url,
     ingest_token=ingest_token,
+    voice_status=voice_status,
     use_slash_commands=True,
 )
 

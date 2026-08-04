@@ -91,6 +91,7 @@ const publicStreamStatus = (stream) => ({
   name: stream.name,
   channelId: stream.channelId,
   channelName: stream.channelName,
+  voiceStatus: stream.voiceStatus,
   state: stream.ingestClient ? 'ready' : 'waiting-for-bot',
   listeners: stream.mixer.clientCount(),
   activeSpeakers: stream.mixer.activeSpeakerCount(),
@@ -110,6 +111,7 @@ const streamFromIngestUrl = (url) => {
   const name = safeLabel(url.searchParams.get('serverName'), '');
   const channelId = safeLabel(url.searchParams.get('channelId'), '');
   const channelName = safeLabel(url.searchParams.get('channelName'), '');
+  const voiceStatus = String(url.searchParams.get('voiceStatus') ?? '').trim().slice(0, 500);
   if (!id || !name || !channelId || !channelName) {
     return null;
   }
@@ -121,6 +123,7 @@ const streamFromIngestUrl = (url) => {
       name,
       channelId,
       channelName,
+      voiceStatus,
       ingestClient: null,
       talkClient: null,
       lastIngestAt: 0,
@@ -134,6 +137,7 @@ const streamFromIngestUrl = (url) => {
     stream.name = name;
     stream.channelId = channelId;
     stream.channelName = channelName;
+    stream.voiceStatus = voiceStatus;
   }
   return stream;
 };

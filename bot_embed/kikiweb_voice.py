@@ -16,6 +16,7 @@ import davey
 import discord
 from discord.ext import voice_recv
 from discord.ext.voice_recv.reader import AudioReader
+from discord.http import Route
 
 try:
     import imageio_ffmpeg
@@ -51,6 +52,7 @@ MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 class KikiWebConfig:
     relay_url: str
     ingest_token: str = ""
+    voice_status: str = "試聴完全自由！"
     reconnect_delay: float = 3.0
     listen_restart_delay: float = 1.0
     listen_watchdog_interval: float = 5.0
@@ -74,6 +76,7 @@ class KikiWebConfig:
                 "serverName": server_name,
                 "channelId": str(channel_id),
                 "channelName": channel_name,
+                "voiceStatus": self.voice_status,
             }
         )
         if self.ingest_token:
@@ -235,6 +238,23 @@ class KikiWebVoiceRelay:
         self.channel_name = ""
         self.web_audio_source = KikiWebWebAudioSource()
 
+    async def _set_voice_status(
+        self,
+        channel: discord.VoiceChannel | discord.StageChannel,
+        status: Optional[str],
+    ) -> None:
+        try:
+            await channel._state.http.request(
+                Route("PUT", "/channels/{channel_id}/voice-status", channel_id=channel.id),
+                json={"status": status or None},
+            )
+        except discord.Forbidden:
+            LOGGER.warning(
+                "KikiWeb could not set the VC status. Give the Bot the Set Voice Channel Status permission."
+            )
+        except discord.HTTPException as error:
+            LOGGER.warning("KikiWeb could not update the VC status: %s", error)
+
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
@@ -258,6 +278,9 @@ class KikiWebVoiceRelay:
 
         if channel.guild.voice_client:
             voice_client = channel.guild.voice_client
+            previous_channel = getattr(voice_client, "channel", None)
+            if previous_channel and getattr(previous_channel, "id", None) != channel.id:
+                await self._set_voice_status(previous_channel, None)
             if not isinstance(voice_client, KikiWebVoiceRecvClient):
                 await voice_client.disconnect(force=True)
                 voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
@@ -267,6 +290,7 @@ class KikiWebVoiceRelay:
             voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
 
         self.voice_client = voice_client
+        await self._set_voice_status(channel, self.config.voice_status)
         await self._start_listening()
         if not self.listen_watchdog_task or self.listen_watchdog_task.done():
             self.listen_watchdog_task = asyncio.create_task(
@@ -281,6 +305,9 @@ class KikiWebVoiceRelay:
             self.voice_client.stop_listening()
 
         if self.voice_client and self.voice_client.is_connected():
+            channel = getattr(self.voice_client, "channel", None)
+            if channel is not None:
+                await self._set_voice_status(channel, None)
             await self.voice_client.disconnect(force=True)
 
         if self.sender_task:
@@ -656,10 +683,17 @@ def install_kikiweb_commands(
     *,
     relay_url: str,
     ingest_token: str = "",
+    voice_status: str = "試聴完全自由！",
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = False,
 ) -> KikiWebRelayManager:
-    manager = KikiWebRelayManager(KikiWebConfig(relay_url=relay_url, ingest_token=ingest_token))
+    manager = KikiWebRelayManager(
+        KikiWebConfig(
+            relay_url=relay_url,
+            ingest_token=ingest_token,
+            voice_status=voice_status,
+        )
+    )
 
     if use_slash_commands:
         tree = getattr(bot, "tree", None)
