@@ -37,6 +37,8 @@ type ApiStatus = {
   };
 };
 
+type TalkVoicePreset = 'normal' | 'feminine';
+
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
 const listenToken = ref(import.meta.env.VITE_LISTEN_TOKEN || '');
 const talkToken = ref(import.meta.env.VITE_TALK_TOKEN || '');
@@ -66,6 +68,8 @@ const talkSensitivity = ref(
 const talkNoiseGateThreshold = computed(() => Math.max(0.002, 0.018 - talkSensitivity.value * 0.0018));
 const storedTalkPitch = Number(window.localStorage.getItem('kikiweb-talk-pitch'));
 const talkPitch = ref(Number.isFinite(storedTalkPitch) ? Math.min(1.5, Math.max(0.7, storedTalkPitch)) : 1);
+const storedTalkVoicePreset = window.localStorage.getItem('kikiweb-talk-voice-preset');
+const talkVoicePreset = ref<TalkVoicePreset>(storedTalkVoicePreset === 'feminine' ? 'feminine' : 'normal');
 
 const secretSequence = [
   'home',
@@ -99,6 +103,9 @@ let talkSocket: WebSocket | null = null;
 let talkAudioContext: AudioContext | null = null;
 let talkSourceNode: MediaStreamAudioSourceNode | null = null;
 let talkCaptureNode: AudioWorkletNode | null = null;
+let talkHighpassNode: BiquadFilterNode | null = null;
+let talkBodyNode: BiquadFilterNode | null = null;
+let talkPresenceNode: BiquadFilterNode | null = null;
 let talkMicStream: MediaStream | null = null;
 let talkRemainder = new Uint8Array(0);
 
@@ -109,6 +116,15 @@ const resumeAudio = () => {
   if (talkAudioContext && talkAudioContext.state !== 'running' && talkAudioContext.state !== 'closed') {
     void talkAudioContext.resume().catch(() => undefined);
   }
+};
+
+const applyTalkVoicePreset = () => {
+  const feminine = talkVoicePreset.value === 'feminine';
+  const now = talkAudioContext?.currentTime ?? 0;
+  talkHighpassNode?.frequency.setTargetAtTime(feminine ? 125 : 25, now, 0.02);
+  talkBodyNode?.gain.setTargetAtTime(feminine ? -5 : 0, now, 0.02);
+  talkPresenceNode?.gain.setTargetAtTime(feminine ? 4 : 0, now, 0.02);
+  talkCaptureNode?.port.postMessage({ type: 'voice-preset', value: talkVoicePreset.value });
 };
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
@@ -358,6 +374,12 @@ const releaseTalkResources = () => {
   talkCaptureNode = null;
   talkSourceNode?.disconnect();
   talkSourceNode = null;
+  talkHighpassNode?.disconnect();
+  talkHighpassNode = null;
+  talkBodyNode?.disconnect();
+  talkBodyNode = null;
+  talkPresenceNode?.disconnect();
+  talkPresenceNode = null;
   talkMicStream?.getTracks().forEach((track) => track.stop());
   talkMicStream = null;
   void talkAudioContext?.close();
@@ -427,7 +449,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=6');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=7');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,
@@ -437,6 +459,7 @@ const startTalking = async () => {
         noiseGateThreshold: talkNoiseGateThreshold.value,
         speechGain: talkGain.value,
         pitch: talkPitch.value,
+        voicePreset: talkVoicePreset.value,
       },
     });
     talkCaptureNode.port.onmessage = (event) => {
@@ -444,7 +467,22 @@ const startTalking = async () => {
         sendTalkPcm(event.data.buffer as ArrayBuffer);
       }
     };
-    talkSourceNode.connect(talkCaptureNode);
+    talkHighpassNode = talkAudioContext.createBiquadFilter();
+    talkHighpassNode.type = 'highpass';
+    talkHighpassNode.Q.value = 0.7;
+    talkBodyNode = talkAudioContext.createBiquadFilter();
+    talkBodyNode.type = 'peaking';
+    talkBodyNode.frequency.value = 240;
+    talkBodyNode.Q.value = 0.9;
+    talkPresenceNode = talkAudioContext.createBiquadFilter();
+    talkPresenceNode.type = 'peaking';
+    talkPresenceNode.frequency.value = 3_200;
+    talkPresenceNode.Q.value = 0.8;
+    talkSourceNode.connect(talkHighpassNode);
+    talkHighpassNode.connect(talkBodyNode);
+    talkBodyNode.connect(talkPresenceNode);
+    talkPresenceNode.connect(talkCaptureNode);
+    applyTalkVoicePreset();
     talkCaptureNode.connect(talkAudioContext.destination);
     await talkAudioContext.resume();
 
@@ -559,6 +597,11 @@ watch(talkPitch, (value) => {
   }
   window.localStorage.setItem('kikiweb-talk-pitch', String(normalized));
   talkCaptureNode?.port.postMessage({ type: 'pitch', value: normalized });
+});
+
+watch(talkVoicePreset, (value) => {
+  window.localStorage.setItem('kikiweb-talk-voice-preset', value);
+  applyTalkVoicePreset();
 });
 
 watch(currentPage, (page) => {
@@ -728,6 +771,28 @@ onBeforeUnmount(() => {
         <span>マイク送話ピッチ {{ talkPitch.toFixed(2) }}x</span>
         <input v-model.number="talkPitch" min="0.7" max="1.5" step="0.05" type="range" />
       </label>
+
+      <fieldset v-if="talkUnlocked" class="voice-preset">
+        <legend>マイク音声</legend>
+        <div>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'normal' }"
+            :aria-pressed="talkVoicePreset === 'normal'"
+            @click="talkVoicePreset = 'normal'"
+          >
+            通常
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'feminine' }"
+            :aria-pressed="talkVoicePreset === 'feminine'"
+            @click="talkVoicePreset = 'feminine'"
+          >
+            女声
+          </button>
+        </div>
+      </fieldset>
 
       <div class="audio-meter" aria-live="polite">
         <span>Buffer {{ bufferMs }}ms</span>

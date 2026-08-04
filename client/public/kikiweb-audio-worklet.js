@@ -177,6 +177,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       Math.min(8.5, Number(options?.processorOptions?.speechGain) || 2.5),
     );
     this.pitch = Math.max(0.7, Math.min(1.5, Number(options?.processorOptions?.pitch) || 1));
+    this.voicePreset = options?.processorOptions?.voicePreset === "feminine" ? "feminine" : "normal";
     this.gateGain = 0;
     this.gateHoldFrames = 0;
     this.ringSize = 16_384;
@@ -198,6 +199,9 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       if (event.data?.type === "pitch") {
         this.pitch = Math.max(0.7, Math.min(1.5, Number(event.data.value) || 1));
       }
+      if (event.data?.type === "voice-preset") {
+        this.voicePreset = event.data.value === "feminine" ? "feminine" : "normal";
+      }
     };
   }
 
@@ -216,7 +220,8 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
-    const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch;
+    const presetPitch = this.voicePreset === "feminine" ? 1.22 : 1;
+    const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch * presetPitch;
     return this.readRing(buffer, sourcePosition) * window;
   }
 

@@ -616,6 +616,43 @@ h2 {
   accent-color: var(--coral);
 }
 
+.voice-preset {
+  margin: 18px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.voice-preset legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.voice-preset div {
+  width: min(100%, 320px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--control-line);
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--surface-soft);
+}
+
+.voice-preset button {
+  min-height: 38px;
+  border-color: transparent;
+  padding: 0 14px;
+  background: transparent;
+}
+
+.voice-preset button.active {
+  border-color: var(--primary);
+  color: #ffffff;
+  background: var(--primary);
+}
+
 .soundboard-toggle {
   min-height: 52px;
   display: grid;
