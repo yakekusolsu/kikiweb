@@ -277,14 +277,19 @@ code {
 
 .voice-status {
   max-width: min(320px, 100%);
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
   overflow-wrap: anywhere;
-  border: 1px solid var(--primary-soft);
+  border: 1px solid var(--primary);
   border-radius: 6px;
-  padding: 5px 9px;
-  color: var(--primary);
-  background: var(--surface-soft);
-  font-size: 0.82rem;
+  padding: 7px 12px;
+  color: #ffffff;
+  background: var(--primary);
+  box-shadow: 0 5px 16px rgba(24, 63, 74, 0.2);
+  font-size: 0.98rem;
   font-weight: 800;
+  line-height: 1.35;
 }
 
 .mark {
