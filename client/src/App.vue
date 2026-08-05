@@ -37,19 +37,61 @@ type ApiStatus = {
   };
 };
 
-type TalkVoicePreset = 'normal' | 'feminine' | 'masculine' | 'robot' | 'minions' | 'chorus';
+type TalkVoicePreset =
+  | 'normal'
+  | 'feminine'
+  | 'masculine'
+  | 'robot'
+  | 'minions'
+  | 'chorus'
+  | 'natural-low'
+  | 'bright'
+  | 'radio'
+  | 'boy'
+  | 'asmr';
 
-const talkVoicePresets: TalkVoicePreset[] = ['normal', 'feminine', 'masculine', 'robot', 'minions', 'chorus'];
+type TalkVoicePresetSettings = {
+  highpass: number;
+  lowpass: number;
+  bodyFrequency: number;
+  bodyGain: number;
+  presenceFrequency: number;
+  presenceGain: number;
+};
+
+const talkVoicePresets: TalkVoicePreset[] = [
+  'normal',
+  'feminine',
+  'masculine',
+  'robot',
+  'minions',
+  'chorus',
+  'natural-low',
+  'bright',
+  'radio',
+  'boy',
+  'asmr',
+];
 const talkVoicePresetSettings: Record<
   TalkVoicePreset,
-  { highpass: number; bodyFrequency: number; bodyGain: number; presenceFrequency: number; presenceGain: number }
+  TalkVoicePresetSettings
 > = {
-  normal: { highpass: 25, bodyFrequency: 240, bodyGain: 0, presenceFrequency: 3_200, presenceGain: 0 },
-  feminine: { highpass: 125, bodyFrequency: 240, bodyGain: -5, presenceFrequency: 3_200, presenceGain: 4 },
-  masculine: { highpass: 45, bodyFrequency: 180, bodyGain: 5, presenceFrequency: 2_800, presenceGain: -2 },
-  robot: { highpass: 80, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
-  minions: { highpass: 180, bodyFrequency: 300, bodyGain: -7, presenceFrequency: 4_200, presenceGain: 6 },
-  chorus: { highpass: 45, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 2 },
+  normal: { highpass: 25, lowpass: 18_000, bodyFrequency: 240, bodyGain: 0, presenceFrequency: 3_200, presenceGain: 0 },
+  feminine: { highpass: 125, lowpass: 16_000, bodyFrequency: 240, bodyGain: -5, presenceFrequency: 3_200, presenceGain: 4 },
+  masculine: { highpass: 45, lowpass: 15_000, bodyFrequency: 180, bodyGain: 5, presenceFrequency: 2_800, presenceGain: -2 },
+  robot: { highpass: 80, lowpass: 8_000, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
+  minions: { highpass: 180, lowpass: 15_000, bodyFrequency: 300, bodyGain: -7, presenceFrequency: 4_200, presenceGain: 6 },
+  chorus: { highpass: 45, lowpass: 16_000, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 2 },
+  'natural-low': { highpass: 35, lowpass: 16_000, bodyFrequency: 170, bodyGain: 3, presenceFrequency: 3_000, presenceGain: 1 },
+  bright: { highpass: 70, lowpass: 18_000, bodyFrequency: 260, bodyGain: -1, presenceFrequency: 3_800, presenceGain: 4 },
+  radio: { highpass: 140, lowpass: 5_200, bodyFrequency: 650, bodyGain: 2, presenceFrequency: 2_600, presenceGain: 3 },
+  boy: { highpass: 105, lowpass: 17_000, bodyFrequency: 260, bodyGain: -3, presenceFrequency: 3_500, presenceGain: 3 },
+  asmr: { highpass: 35, lowpass: 13_500, bodyFrequency: 160, bodyGain: 3, presenceFrequency: 5_200, presenceGain: 3 },
+};
+
+const storedToggle = (key: string, fallback: boolean) => {
+  const value = window.localStorage.getItem(key);
+  return value === null ? fallback : value === 'on';
 };
 
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
@@ -92,6 +134,12 @@ const storedTalkEchoAmount = Number(window.localStorage.getItem('kikiweb-talk-ec
 const talkEchoAmount = ref(
   Number.isFinite(storedTalkEchoAmount) ? Math.min(100, Math.max(0, storedTalkEchoAmount)) : 45,
 );
+const talkCallOptimization = ref(storedToggle('kikiweb-talk-call-optimization', true));
+const talkNoiseReduction = ref(storedToggle('kikiweb-talk-noise-reduction', true));
+const talkMicBoost = ref(storedToggle('kikiweb-talk-mic-boost', false));
+const talkEchoCancellation = ref(storedToggle('kikiweb-talk-echo-cancellation', true));
+const talkLimiter = ref(storedToggle('kikiweb-talk-limiter', true));
+const talkAutoVolume = ref(storedToggle('kikiweb-talk-auto-volume', true));
 
 const secretSequence = [
   'home',
@@ -128,10 +176,14 @@ let talkCaptureNode: AudioWorkletNode | null = null;
 let talkHighpassNode: BiquadFilterNode | null = null;
 let talkBodyNode: BiquadFilterNode | null = null;
 let talkPresenceNode: BiquadFilterNode | null = null;
+let talkLowpassNode: BiquadFilterNode | null = null;
 let talkDryNode: GainNode | null = null;
 let talkEchoDelayNode: DelayNode | null = null;
 let talkEchoFeedbackNode: GainNode | null = null;
 let talkEchoWetNode: GainNode | null = null;
+let talkBoostNode: GainNode | null = null;
+let talkCompressorNode: DynamicsCompressorNode | null = null;
+let talkLimiterNode: DynamicsCompressorNode | null = null;
 let talkMicStream: MediaStream | null = null;
 let talkRemainder = new Uint8Array(0);
 
@@ -147,12 +199,90 @@ const resumeAudio = () => {
 const applyTalkVoicePreset = () => {
   const settings = talkVoicePresetSettings[talkVoicePreset.value];
   const now = talkAudioContext?.currentTime ?? 0;
-  talkHighpassNode?.frequency.setTargetAtTime(settings.highpass, now, 0.02);
+  const optimizedHighpass = talkCallOptimization.value ? Math.max(45, settings.highpass) : settings.highpass;
+  const optimizedLowpass = talkCallOptimization.value ? Math.min(14_000, settings.lowpass) : settings.lowpass;
+  talkHighpassNode?.frequency.setTargetAtTime(optimizedHighpass, now, 0.02);
   talkBodyNode?.frequency.setTargetAtTime(settings.bodyFrequency, now, 0.02);
   talkBodyNode?.gain.setTargetAtTime(settings.bodyGain, now, 0.02);
   talkPresenceNode?.frequency.setTargetAtTime(settings.presenceFrequency, now, 0.02);
   talkPresenceNode?.gain.setTargetAtTime(settings.presenceGain, now, 0.02);
+  talkLowpassNode?.frequency.setTargetAtTime(optimizedLowpass, now, 0.02);
   talkCaptureNode?.port.postMessage({ type: 'voice-preset', value: talkVoicePreset.value });
+  applyTalkDynamics();
+};
+
+const setCompressor = (
+  node: DynamicsCompressorNode | null,
+  settings: { threshold: number; knee: number; ratio: number; attack: number; release: number },
+) => {
+  const now = talkAudioContext?.currentTime ?? 0;
+  node?.threshold.setTargetAtTime(settings.threshold, now, 0.02);
+  node?.knee.setTargetAtTime(settings.knee, now, 0.02);
+  node?.ratio.setTargetAtTime(settings.ratio, now, 0.02);
+  node?.attack.setTargetAtTime(settings.attack, now, 0.02);
+  node?.release.setTargetAtTime(settings.release, now, 0.02);
+};
+
+function applyTalkDynamics() {
+  const now = talkAudioContext?.currentTime ?? 0;
+  const boostMultiplier = talkMicBoost.value ? 2 : 1;
+  talkBoostNode?.gain.setTargetAtTime(talkGain.value * boostMultiplier, now, 0.02);
+
+  if (talkAutoVolume.value) {
+    setCompressor(talkCompressorNode, { threshold: -24, knee: 12, ratio: 4, attack: 0.006, release: 0.25 });
+  } else if (talkVoicePreset.value === 'radio') {
+    setCompressor(talkCompressorNode, { threshold: -20, knee: 10, ratio: 3, attack: 0.01, release: 0.18 });
+  } else if (talkVoicePreset.value === 'asmr') {
+    setCompressor(talkCompressorNode, { threshold: -26, knee: 12, ratio: 3, attack: 0.008, release: 0.3 });
+  } else {
+    setCompressor(talkCompressorNode, { threshold: 0, knee: 0, ratio: 1, attack: 0.003, release: 0.1 });
+  }
+
+  setCompressor(
+    talkLimiterNode,
+    talkLimiter.value
+      ? { threshold: -3, knee: 0, ratio: 20, attack: 0.002, release: 0.12 }
+      : { threshold: 0, knee: 0, ratio: 1, attack: 0.003, release: 0.1 },
+  );
+}
+
+type TalkMediaConstraints = MediaTrackConstraints & { voiceIsolation?: boolean };
+type TalkSupportedConstraints = MediaTrackSupportedConstraints & { voiceIsolation?: boolean; latency?: boolean };
+
+const createTalkMediaConstraints = (includeOptimization = true): TalkMediaConstraints => {
+  const supported = navigator.mediaDevices?.getSupportedConstraints() as TalkSupportedConstraints | undefined;
+  const optimize = includeOptimization && talkCallOptimization.value;
+  return {
+    channelCount: 1,
+    sampleRate: 48_000,
+    echoCancellation: talkEchoCancellation.value,
+    noiseSuppression: talkNoiseReduction.value,
+    autoGainControl: talkAutoVolume.value,
+    ...(optimize && supported?.voiceIsolation ? { voiceIsolation: true } : {}),
+    ...(optimize && supported?.latency ? { latency: { ideal: 0.02 } } : {}),
+  };
+};
+
+const applyTalkMediaConstraints = async () => {
+  const track = talkMicStream?.getAudioTracks()[0];
+  if (!track) return;
+
+  try {
+    await track.applyConstraints(createTalkMediaConstraints());
+  } catch {
+    try {
+      await track.applyConstraints(createTalkMediaConstraints(false));
+    } catch {
+      talkError.value = 'この端末では一部のマイク補正を変更できませんでした。';
+    }
+  }
+};
+
+const applyTalkNoiseGate = () => {
+  talkCaptureNode?.port.postMessage({
+    type: 'noise-gate',
+    value: talkNoiseReduction.value ? talkNoiseGateThreshold.value : 0,
+  });
 };
 
 const applyTalkEcho = () => {
@@ -416,6 +546,8 @@ const releaseTalkResources = () => {
   talkBodyNode = null;
   talkPresenceNode?.disconnect();
   talkPresenceNode = null;
+  talkLowpassNode?.disconnect();
+  talkLowpassNode = null;
   talkDryNode?.disconnect();
   talkDryNode = null;
   talkEchoDelayNode?.disconnect();
@@ -424,6 +556,12 @@ const releaseTalkResources = () => {
   talkEchoFeedbackNode = null;
   talkEchoWetNode?.disconnect();
   talkEchoWetNode = null;
+  talkBoostNode?.disconnect();
+  talkBoostNode = null;
+  talkCompressorNode?.disconnect();
+  talkCompressorNode = null;
+  talkLimiterNode?.disconnect();
+  talkLimiterNode = null;
   talkMicStream?.getTracks().forEach((track) => track.stop());
   talkMicStream = null;
   void talkAudioContext?.close();
@@ -480,28 +618,21 @@ const startTalking = async () => {
       throw new Error('このブラウザではマイク送話を利用できません。');
     }
 
-    const audioConstraints: MediaTrackConstraints & { voiceIsolation?: boolean } = {
-      channelCount: 1,
-      sampleRate: 48_000,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: false,
-      voiceIsolation: true,
-    };
+    const audioConstraints = createTalkMediaConstraints();
     talkMicStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
     talkAudioContext = new AudioContext({ sampleRate: 48_000 });
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=10');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=11');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2],
       processorOptions: {
-        noiseGateThreshold: talkNoiseGateThreshold.value,
-        speechGain: talkGain.value,
+        noiseGateThreshold: talkNoiseReduction.value ? talkNoiseGateThreshold.value : 0,
+        speechGain: 1,
         pitch: talkPitch.value,
         voicePreset: talkVoicePreset.value,
       },
@@ -522,21 +653,31 @@ const startTalking = async () => {
     talkPresenceNode.type = 'peaking';
     talkPresenceNode.frequency.value = 3_200;
     talkPresenceNode.Q.value = 0.8;
+    talkLowpassNode = talkAudioContext.createBiquadFilter();
+    talkLowpassNode.type = 'lowpass';
+    talkLowpassNode.Q.value = 0.7;
     talkDryNode = talkAudioContext.createGain();
     talkEchoDelayNode = talkAudioContext.createDelay(1);
     talkEchoDelayNode.delayTime.value = 0.22;
     talkEchoFeedbackNode = talkAudioContext.createGain();
     talkEchoWetNode = talkAudioContext.createGain();
+    talkBoostNode = talkAudioContext.createGain();
+    talkCompressorNode = talkAudioContext.createDynamicsCompressor();
+    talkLimiterNode = talkAudioContext.createDynamicsCompressor();
     talkSourceNode.connect(talkHighpassNode);
     talkHighpassNode.connect(talkBodyNode);
     talkBodyNode.connect(talkPresenceNode);
-    talkPresenceNode.connect(talkDryNode);
-    talkDryNode.connect(talkCaptureNode);
-    talkPresenceNode.connect(talkEchoDelayNode);
+    talkPresenceNode.connect(talkLowpassNode);
+    talkLowpassNode.connect(talkDryNode);
+    talkDryNode.connect(talkBoostNode);
+    talkLowpassNode.connect(talkEchoDelayNode);
     talkEchoDelayNode.connect(talkEchoFeedbackNode);
     talkEchoFeedbackNode.connect(talkEchoDelayNode);
     talkEchoDelayNode.connect(talkEchoWetNode);
-    talkEchoWetNode.connect(talkCaptureNode);
+    talkEchoWetNode.connect(talkBoostNode);
+    talkBoostNode.connect(talkCompressorNode);
+    talkCompressorNode.connect(talkLimiterNode);
+    talkLimiterNode.connect(talkCaptureNode);
     applyTalkVoicePreset();
     applyTalkEcho();
     talkCaptureNode.connect(talkAudioContext.destination);
@@ -632,7 +773,7 @@ watch(talkGain, (value) => {
     return;
   }
   window.localStorage.setItem('kikiweb-talk-gain', String(normalized));
-  talkCaptureNode?.port.postMessage({ type: 'speech-gain', value: normalized });
+  applyTalkDynamics();
 });
 
 watch(talkSensitivity, (value) => {
@@ -642,7 +783,7 @@ watch(talkSensitivity, (value) => {
     return;
   }
   window.localStorage.setItem('kikiweb-talk-sensitivity', String(normalized));
-  talkCaptureNode?.port.postMessage({ type: 'noise-gate', value: talkNoiseGateThreshold.value });
+  applyTalkNoiseGate();
 });
 
 watch(talkPitch, (value) => {
@@ -673,6 +814,39 @@ watch(talkEchoAmount, (value) => {
   }
   window.localStorage.setItem('kikiweb-talk-echo-amount', String(normalized));
   applyTalkEcho();
+});
+
+watch(talkCallOptimization, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-call-optimization', enabled ? 'on' : 'off');
+  applyTalkVoicePreset();
+  void applyTalkMediaConstraints();
+});
+
+watch(talkNoiseReduction, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-noise-reduction', enabled ? 'on' : 'off');
+  applyTalkNoiseGate();
+  void applyTalkMediaConstraints();
+});
+
+watch(talkMicBoost, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-mic-boost', enabled ? 'on' : 'off');
+  applyTalkDynamics();
+});
+
+watch(talkEchoCancellation, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-echo-cancellation', enabled ? 'on' : 'off');
+  void applyTalkMediaConstraints();
+});
+
+watch(talkLimiter, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-limiter', enabled ? 'on' : 'off');
+  applyTalkDynamics();
+});
+
+watch(talkAutoVolume, (enabled) => {
+  window.localStorage.setItem('kikiweb-talk-auto-volume', enabled ? 'on' : 'off');
+  applyTalkDynamics();
+  void applyTalkMediaConstraints();
 });
 
 watch(currentPage, (page) => {
@@ -894,6 +1068,46 @@ onBeforeUnmount(() => {
           >
             コーラス
           </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'natural-low' }"
+            :aria-pressed="talkVoicePreset === 'natural-low'"
+            @click="talkVoicePreset = 'natural-low'"
+          >
+            自然な低音
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'bright' }"
+            :aria-pressed="talkVoicePreset === 'bright'"
+            @click="talkVoicePreset = 'bright'"
+          >
+            明るい声
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'radio' }"
+            :aria-pressed="talkVoicePreset === 'radio'"
+            @click="talkVoicePreset = 'radio'"
+          >
+            ラジオ
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'boy' }"
+            :aria-pressed="talkVoicePreset === 'boy'"
+            @click="talkVoicePreset = 'boy'"
+          >
+            少年
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'asmr' }"
+            :aria-pressed="talkVoicePreset === 'asmr'"
+            @click="talkVoicePreset = 'asmr'"
+          >
+            ASMR
+          </button>
         </div>
       </fieldset>
 
@@ -907,6 +1121,42 @@ onBeforeUnmount(() => {
         <span>エコー量 {{ talkEchoAmount }}%</span>
         <input v-model.number="talkEchoAmount" min="0" max="100" step="1" type="range" />
       </label>
+
+      <fieldset v-if="talkUnlocked" class="talk-processing">
+        <legend>Discord向け音声補正</legend>
+        <div class="talk-processing-grid">
+          <label class="soundboard-toggle">
+            <span>通話品質最適化</span>
+            <input v-model="talkCallOptimization" type="checkbox" role="switch" />
+            <strong>{{ talkCallOptimization ? 'ON' : 'OFF' }}</strong>
+          </label>
+          <label class="soundboard-toggle">
+            <span>ノイズ除去</span>
+            <input v-model="talkNoiseReduction" type="checkbox" role="switch" />
+            <strong>{{ talkNoiseReduction ? 'ON' : 'OFF' }}</strong>
+          </label>
+          <label class="soundboard-toggle">
+            <span>マイクブースト</span>
+            <input v-model="talkMicBoost" type="checkbox" role="switch" />
+            <strong>{{ talkMicBoost ? 'ON' : 'OFF' }}</strong>
+          </label>
+          <label class="soundboard-toggle">
+            <span>エコーキャンセル</span>
+            <input v-model="talkEchoCancellation" type="checkbox" role="switch" />
+            <strong>{{ talkEchoCancellation ? 'ON' : 'OFF' }}</strong>
+          </label>
+          <label class="soundboard-toggle">
+            <span>リミッター</span>
+            <input v-model="talkLimiter" type="checkbox" role="switch" />
+            <strong>{{ talkLimiter ? 'ON' : 'OFF' }}</strong>
+          </label>
+          <label class="soundboard-toggle">
+            <span>ボリューム自動調整</span>
+            <input v-model="talkAutoVolume" type="checkbox" role="switch" />
+            <strong>{{ talkAutoVolume ? 'ON' : 'OFF' }}</strong>
+          </label>
+        </div>
+      </fieldset>
 
       <div class="audio-meter" aria-live="polite">
         <span>Buffer {{ bufferMs }}ms</span>

@@ -653,6 +653,29 @@ h2 {
   background: var(--primary);
 }
 
+.talk-processing {
+  margin: 20px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.talk-processing legend {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.talk-processing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  column-gap: 18px;
+}
+
+.talk-processing .soundboard-toggle {
+  margin-top: 8px;
+}
+
 .soundboard-toggle {
   min-height: 52px;
   display: grid;

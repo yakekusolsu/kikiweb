@@ -172,19 +172,32 @@ const KIKIWEB_VOICE_PRESETS = new Set([
   "robot",
   "minions",
   "chorus",
+  "natural-low",
+  "bright",
+  "radio",
+  "boy",
+  "asmr",
 ]);
 
 function normalizeVoicePreset(value) {
   return KIKIWEB_VOICE_PRESETS.has(value) ? value : "normal";
 }
 
+const KIKIWEB_VOICE_PRESET_PITCH = {
+  feminine: 1.14,
+  masculine: 0.86,
+  minions: 1.36,
+  "natural-low": 0.915,
+  boy: 1.09,
+};
+
 class KikiWebPcmCapture extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    this.noiseGateThreshold = Math.max(
-      0,
-      Math.min(0.1, Number(options?.processorOptions?.noiseGateThreshold) || 0.0036),
-    );
+    const configuredNoiseGate = Number(options?.processorOptions?.noiseGateThreshold);
+    this.noiseGateThreshold = Number.isFinite(configuredNoiseGate)
+      ? Math.max(0, Math.min(0.1, configuredNoiseGate))
+      : 0.0036;
     this.speechGain = Math.max(
       1,
       Math.min(8.5, Number(options?.processorOptions?.speechGain) || 2.5),
@@ -215,7 +228,10 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
         this.speechGain = Math.max(1, Math.min(8.5, Number(event.data.value) || 1));
       }
       if (event.data?.type === "noise-gate") {
-        this.noiseGateThreshold = Math.max(0.002, Math.min(0.03, Number(event.data.value) || 0.0036));
+        const threshold = Number(event.data.value);
+        this.noiseGateThreshold = Number.isFinite(threshold)
+          ? Math.max(0, Math.min(0.03, threshold))
+          : 0.0036;
       }
       if (event.data?.type === "pitch") {
         this.pitch = Math.max(0.7, Math.min(1.5, Number(event.data.value) || 1));
@@ -241,14 +257,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
-    const presetPitch =
-      this.voicePreset === "feminine"
-        ? 1.14
-        : this.voicePreset === "masculine"
-          ? 0.86
-          : this.voicePreset === "minions"
-            ? 1.36
-            : 1;
+    const presetPitch = KIKIWEB_VOICE_PRESET_PITCH[this.voicePreset] ?? 1;
     const effectivePitch = Math.min(1.75, Math.max(0.6, this.pitch * presetPitch));
     const sourcePosition = grainStart - this.latencyFrames + grainOffset * effectivePitch;
     return this.readRing(buffer, sourcePosition) * window;
