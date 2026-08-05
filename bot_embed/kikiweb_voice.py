@@ -89,18 +89,22 @@ class KikiWebDAVEAudioReader(AudioReader):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._transport_decrypt_rtp = self.decryptor.decrypt_rtp
-        self._last_dave_error_log_at = 0.0
+        self._last_packet_error_log_at = 0.0
         self.decryptor.decrypt_rtp = self._decrypt_rtp
 
     def _decrypt_rtp(self, packet) -> bytes:
-        payload = self._transport_decrypt_rtp(packet)
+        try:
+            payload = self._transport_decrypt_rtp(packet)
+        except Exception as error:
+            self._log_packet_error("KikiWeb skipped a malformed Discord voice packet: %s", error)
+            return OPUS_SILENCE
 
         if packet.padding:
             if not payload:
                 return OPUS_SILENCE
             padding_size = payload[-1]
             if padding_size == 0 or padding_size > len(payload):
-                self._log_dave_error("KikiWeb dropped an RTP packet with invalid padding.")
+                self._log_packet_error("KikiWeb dropped an RTP packet with invalid padding.")
                 return OPUS_SILENCE
             payload = payload[:-padding_size]
 
@@ -116,14 +120,14 @@ class KikiWebDAVEAudioReader(AudioReader):
         try:
             return dave_session.decrypt(user_id, davey.MediaType.audio, payload)
         except Exception as error:
-            self._log_dave_error("KikiWeb dropped a DAVE packet that could not be decrypted: %s", error)
+            self._log_packet_error("KikiWeb dropped a DAVE packet that could not be decrypted: %s", error)
             return OPUS_SILENCE
 
-    def _log_dave_error(self, message: str, *args) -> None:
+    def _log_packet_error(self, message: str, *args) -> None:
         now = time.monotonic()
-        if now - self._last_dave_error_log_at < 5:
+        if now - self._last_packet_error_log_at < 5:
             return
-        self._last_dave_error_log_at = now
+        self._last_packet_error_log_at = now
         LOGGER.warning(message, *args)
 
 
@@ -777,6 +781,10 @@ class KikiWebVoiceRelay:
                         await asyncio.sleep(self.config.reconnect_delay)
             except asyncio.CancelledError:
                 raise
+            except aiohttp.ClientConnectionError as error:
+                if not self.closed.is_set():
+                    LOGGER.warning("KikiWeb relay transport closed; reconnecting: %s", error)
+                    await asyncio.sleep(self.config.reconnect_delay)
             except Exception:
                 LOGGER.exception("KikiWeb relay connection failed")
                 await asyncio.sleep(self.config.reconnect_delay)
