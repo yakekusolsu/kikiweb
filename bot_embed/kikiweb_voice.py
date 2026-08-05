@@ -424,10 +424,19 @@ class KikiWebVoiceRelay:
         if message.channel.id != self.chat_channel_id:
             return
 
-        content = message.content.strip()
-        if not content and message.attachments:
-            attachment_names = ", ".join(attachment.filename for attachment in message.attachments[:5])
-            content = f"[添付ファイル] {attachment_names}"
+        attachment_urls: list[str] = []
+        for attachment in message.attachments[:5]:
+            url = str(getattr(attachment, "url", "")).strip()
+            candidate = "\n".join((*attachment_urls, url))
+            if url and len(candidate) <= 2_000:
+                attachment_urls.append(url)
+
+        attachment_block = "\n".join(attachment_urls)
+        message_content = message.content.strip()
+        message_limit = 2_000 - len(attachment_block) - (1 if message_content and attachment_block else 0)
+        content = "\n".join(
+            part for part in (message_content[:max(0, message_limit)], attachment_block) if part
+        )
         if not content:
             return
 
