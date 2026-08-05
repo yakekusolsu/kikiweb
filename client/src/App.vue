@@ -37,7 +37,18 @@ type ApiStatus = {
   };
 };
 
-type TalkVoicePreset = 'normal' | 'feminine';
+type TalkVoicePreset = 'normal' | 'feminine' | 'masculine' | 'robot';
+
+const talkVoicePresets: TalkVoicePreset[] = ['normal', 'feminine', 'masculine', 'robot'];
+const talkVoicePresetSettings: Record<
+  TalkVoicePreset,
+  { highpass: number; bodyFrequency: number; bodyGain: number; presenceFrequency: number; presenceGain: number }
+> = {
+  normal: { highpass: 25, bodyFrequency: 240, bodyGain: 0, presenceFrequency: 3_200, presenceGain: 0 },
+  feminine: { highpass: 125, bodyFrequency: 240, bodyGain: -5, presenceFrequency: 3_200, presenceGain: 4 },
+  masculine: { highpass: 45, bodyFrequency: 180, bodyGain: 5, presenceFrequency: 2_800, presenceGain: -2 },
+  robot: { highpass: 80, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
+};
 
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
 const listenToken = ref(import.meta.env.VITE_LISTEN_TOKEN || '');
@@ -69,7 +80,11 @@ const talkNoiseGateThreshold = computed(() => Math.max(0.002, 0.018 - talkSensit
 const storedTalkPitch = Number(window.localStorage.getItem('kikiweb-talk-pitch'));
 const talkPitch = ref(Number.isFinite(storedTalkPitch) ? Math.min(1.5, Math.max(0.7, storedTalkPitch)) : 1);
 const storedTalkVoicePreset = window.localStorage.getItem('kikiweb-talk-voice-preset');
-const talkVoicePreset = ref<TalkVoicePreset>(storedTalkVoicePreset === 'feminine' ? 'feminine' : 'normal');
+const talkVoicePreset = ref<TalkVoicePreset>(
+  talkVoicePresets.includes(storedTalkVoicePreset as TalkVoicePreset)
+    ? (storedTalkVoicePreset as TalkVoicePreset)
+    : 'normal',
+);
 const talkEchoEnabled = ref(window.localStorage.getItem('kikiweb-talk-echo') === 'on');
 const storedTalkEchoAmount = Number(window.localStorage.getItem('kikiweb-talk-echo-amount'));
 const talkEchoAmount = ref(
@@ -128,11 +143,13 @@ const resumeAudio = () => {
 };
 
 const applyTalkVoicePreset = () => {
-  const feminine = talkVoicePreset.value === 'feminine';
+  const settings = talkVoicePresetSettings[talkVoicePreset.value];
   const now = talkAudioContext?.currentTime ?? 0;
-  talkHighpassNode?.frequency.setTargetAtTime(feminine ? 125 : 25, now, 0.02);
-  talkBodyNode?.gain.setTargetAtTime(feminine ? -5 : 0, now, 0.02);
-  talkPresenceNode?.gain.setTargetAtTime(feminine ? 4 : 0, now, 0.02);
+  talkHighpassNode?.frequency.setTargetAtTime(settings.highpass, now, 0.02);
+  talkBodyNode?.frequency.setTargetAtTime(settings.bodyFrequency, now, 0.02);
+  talkBodyNode?.gain.setTargetAtTime(settings.bodyGain, now, 0.02);
+  talkPresenceNode?.frequency.setTargetAtTime(settings.presenceFrequency, now, 0.02);
+  talkPresenceNode?.gain.setTargetAtTime(settings.presenceGain, now, 0.02);
   talkCaptureNode?.port.postMessage({ type: 'voice-preset', value: talkVoicePreset.value });
 };
 
@@ -474,7 +491,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=8');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=9');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,
@@ -825,7 +842,7 @@ onBeforeUnmount(() => {
       </label>
 
       <fieldset v-if="talkUnlocked" class="voice-preset">
-        <legend>マイク音声</legend>
+        <legend>ボイスチェンジャー</legend>
         <div>
           <button
             type="button"
@@ -842,6 +859,22 @@ onBeforeUnmount(() => {
             @click="talkVoicePreset = 'feminine'"
           >
             女声
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'masculine' }"
+            :aria-pressed="talkVoicePreset === 'masculine'"
+            @click="talkVoicePreset = 'masculine'"
+          >
+            男声
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'robot' }"
+            :aria-pressed="talkVoicePreset === 'robot'"
+            @click="talkVoicePreset = 'robot'"
+          >
+            ロボット
           </button>
         </div>
       </fieldset>

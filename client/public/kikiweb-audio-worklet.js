@@ -165,6 +165,12 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 
 registerProcessor("kikiweb-pcm-player", KikiWebPcmPlayer);
 
+const KIKIWEB_VOICE_PRESETS = new Set(["normal", "feminine", "masculine", "robot"]);
+
+function normalizeVoicePreset(value) {
+  return KIKIWEB_VOICE_PRESETS.has(value) ? value : "normal";
+}
+
 class KikiWebPcmCapture extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -177,7 +183,8 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       Math.min(8.5, Number(options?.processorOptions?.speechGain) || 2.5),
     );
     this.pitch = Math.max(0.7, Math.min(1.5, Number(options?.processorOptions?.pitch) || 1));
-    this.voicePreset = options?.processorOptions?.voicePreset === "feminine" ? "feminine" : "normal";
+    this.voicePreset = normalizeVoicePreset(options?.processorOptions?.voicePreset);
+    this.robotPhase = 0;
     this.gateGain = 0;
     this.gateHoldFrames = 0;
     this.ringSize = 32_768;
@@ -201,7 +208,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
         this.pitch = Math.max(0.7, Math.min(1.5, Number(event.data.value) || 1));
       }
       if (event.data?.type === "voice-preset") {
-        this.voicePreset = event.data.value === "feminine" ? "feminine" : "normal";
+        this.voicePreset = normalizeVoicePreset(event.data.value);
       }
     };
   }
@@ -221,7 +228,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
-    const presetPitch = this.voicePreset === "feminine" ? 1.14 : 1;
+    const presetPitch = this.voicePreset === "feminine" ? 1.14 : this.voicePreset === "masculine" ? 0.86 : 1;
     const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch * presetPitch;
     return this.readRing(buffer, sourcePosition) * window;
   }
@@ -265,8 +272,17 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
 
       const pcm = new Int16Array(left.length * 2);
       for (let index = 0; index < left.length; index += 1) {
-        const leftSample = Math.tanh(this.pitchShiftedSample(this.leftRing) * this.gateGain * this.speechGain);
-        const rightSample = Math.tanh(this.pitchShiftedSample(this.rightRing) * this.gateGain * this.speechGain);
+        let leftShifted = this.pitchShiftedSample(this.leftRing);
+        let rightShifted = this.pitchShiftedSample(this.rightRing);
+        if (this.voicePreset === "robot") {
+          const carrier = Math.sin(this.robotPhase);
+          leftShifted = Math.round((leftShifted * 0.68 + leftShifted * carrier * 0.32) * 128) / 128;
+          rightShifted = Math.round((rightShifted * 0.68 + rightShifted * carrier * 0.32) * 128) / 128;
+          this.robotPhase += (Math.PI * 2 * 72) / sampleRate;
+          if (this.robotPhase >= Math.PI * 2) this.robotPhase -= Math.PI * 2;
+        }
+        const leftSample = Math.tanh(leftShifted * this.gateGain * this.speechGain);
+        const rightSample = Math.tanh(rightShifted * this.gateGain * this.speechGain);
         pcm[index * 2] = leftSample * 32767;
         pcm[index * 2 + 1] = rightSample * 32767;
         this.outputPosition += 1;
