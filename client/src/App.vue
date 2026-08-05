@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ChevronDown, ExternalLink, Moon, Send, Sun } from '@lucide/vue';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { ChevronDown, ExternalLink, MessageCircle, Moon, Send, Sun } from '@lucide/vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
 type VoiceUser = {
@@ -43,6 +43,18 @@ type ApiStatus = {
     ingestConnected: boolean;
     lastIngestAt: number;
   };
+};
+
+type ChatItem = {
+  id: string;
+  channelId: string;
+  channelName: string;
+  authorId: string;
+  authorName: string;
+  bot: boolean;
+  webhook: boolean;
+  content: string;
+  timestamp: string;
 };
 
 type TalkVoicePreset =
@@ -127,6 +139,10 @@ const talkError = ref('');
 const chatMessage = ref('');
 const chatState = ref<'idle' | 'sending' | 'sent' | 'error'>('idle');
 const chatError = ref('');
+const chatConnectionState = ref<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+const chatMessages = ref<ChatItem[]>([]);
+const chatChannelName = ref('');
+const chatListElement = ref<HTMLElement | null>(null);
 const storedTalkGain = Number(window.localStorage.getItem('kikiweb-talk-gain'));
 const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(8.5, Math.max(1, storedTalkGain)) : 2.5);
 const storedTalkSensitivity = Number(window.localStorage.getItem('kikiweb-talk-sensitivity'));
@@ -183,6 +199,8 @@ let workletNode: AudioWorkletNode | null = null;
 let soundboardWorkletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
 let chatStatusTimer: number | undefined;
+let chatReconnectTimer: number | undefined;
+let chatSocket: WebSocket | null = null;
 let talkSocket: WebSocket | null = null;
 let talkAudioContext: AudioContext | null = null;
 let talkSourceNode: MediaStreamAudioSourceNode | null = null;
@@ -434,6 +452,102 @@ const talkWsUrl = computed(() => {
   return url.toString();
 });
 
+const chatWsUrl = computed(() => {
+  const url = new URL(normalizedApiUrl.value);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/chat-stream';
+  if (selectedServerId.value) url.searchParams.set('serverId', selectedServerId.value);
+  if (talkToken.value) url.searchParams.set('token', talkToken.value);
+  return url.toString();
+});
+
+const scrollChatToEnd = () => {
+  void nextTick(() => {
+    const element = chatListElement.value;
+    if (element) element.scrollTop = element.scrollHeight;
+  });
+};
+
+const acceptChatMessage = (message: ChatItem) => {
+  if (!message?.id || !message.content) return;
+  const messages = chatMessages.value.filter((candidate) => candidate.id !== message.id);
+  messages.push(message);
+  messages.sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+  chatMessages.value = messages.slice(-50);
+  chatChannelName.value = message.channelName || chatChannelName.value;
+  scrollChatToEnd();
+};
+
+const closeChatStream = (clearMessages = false) => {
+  if (chatReconnectTimer) window.clearTimeout(chatReconnectTimer);
+  chatReconnectTimer = undefined;
+  const closingSocket = chatSocket;
+  chatSocket = null;
+  if (closingSocket) {
+    closingSocket.onopen = null;
+    closingSocket.onmessage = null;
+    closingSocket.onerror = null;
+    closingSocket.onclose = null;
+    closingSocket.close();
+  }
+  chatConnectionState.value = 'idle';
+  if (clearMessages) {
+    chatMessages.value = [];
+    chatChannelName.value = '';
+  }
+};
+
+const connectChatStream = () => {
+  closeChatStream(true);
+  if (!talkUnlocked.value || currentPage.value !== 'home' || !selectedServerId.value) return;
+  if (!talkToken.value) {
+    chatConnectionState.value = 'error';
+    return;
+  }
+
+  chatConnectionState.value = 'connecting';
+  const nextSocket = new WebSocket(chatWsUrl.value);
+  chatSocket = nextSocket;
+  nextSocket.onopen = () => {
+    if (chatSocket === nextSocket) chatConnectionState.value = 'connected';
+  };
+  nextSocket.onmessage = (event) => {
+    if (chatSocket !== nextSocket || typeof event.data !== 'string') return;
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === 'chat-snapshot') {
+        chatChannelName.value = String(payload.channelName || 'Discord chat');
+        chatMessages.value = [];
+        for (const message of Array.isArray(payload.messages) ? payload.messages : []) {
+          acceptChatMessage(message as ChatItem);
+        }
+      } else if (payload.type === 'chat-message') {
+        acceptChatMessage(payload.message as ChatItem);
+      }
+    } catch {
+      // Ignore malformed relay messages while keeping the live chat connected.
+    }
+  };
+  nextSocket.onerror = () => {
+    if (chatSocket === nextSocket) chatConnectionState.value = 'error';
+  };
+  nextSocket.onclose = () => {
+    if (chatSocket !== nextSocket) return;
+    chatSocket = null;
+    chatConnectionState.value = 'error';
+    chatReconnectTimer = window.setTimeout(connectChatStream, 3_000);
+  };
+};
+
+const chatTime = (timestamp: string) => {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(date);
+};
+
+const chatInitial = (name: string) => Array.from(name.trim())[0]?.toUpperCase() || '?';
+
 const sendChatMessage = async () => {
   const content = chatMessage.value.trim();
   chatError.value = '';
@@ -527,6 +641,9 @@ const fetchStatus = async () => {
         serverList.find((server) => server.state === 'ready')?.id ?? serverList[0]?.id ?? '';
     }
     sendUserVolumes();
+    if (talkUnlocked.value && !chatSocket && currentPage.value === 'home') {
+      connectChatStream();
+    }
   } catch (error) {
     statusError.value = error instanceof Error ? error.message : String(error);
   }
@@ -873,6 +990,13 @@ watch(selectedServerId, (value, previousValue) => {
   ) {
     stopTalking();
   }
+
+  if (talkUnlocked.value && value !== previousValue) connectChatStream();
+});
+
+watch(talkUnlocked, (unlocked) => {
+  if (unlocked) connectChatStream();
+  else closeChatStream(true);
 });
 
 watch(theme, saveTheme);
@@ -964,11 +1088,14 @@ watch(currentPage, (page) => {
   if (page !== 'home' && (talkState.value === 'talking' || talkState.value === 'connecting')) {
     stopTalking();
   }
+  if (page === 'home' && talkUnlocked.value) connectChatStream();
+  else closeChatStream(false);
 });
 
 onBeforeUnmount(() => {
   stopListening();
   stopTalking();
+  closeChatStream();
   if (statusTimer) window.clearInterval(statusTimer);
   if (chatStatusTimer) window.clearTimeout(chatStatusTimer);
   window.removeEventListener('hashchange', syncRoute);
@@ -979,7 +1106,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="app-shell" :class="{ 'document-layout': currentPage !== 'home' }">
+  <main
+    class="app-shell"
+    :class="{
+      'document-layout': currentPage !== 'home',
+      'chat-layout': currentPage === 'home' && talkUnlocked,
+    }"
+  >
     <nav class="top-nav" aria-label="ページ">
       <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined" @click="recordSecretAction('home')">KikiWeb</a>
       <div>
@@ -1102,39 +1235,6 @@ onBeforeUnmount(() => {
           Botを鯖に入れる！
         </a>
       </div>
-
-      <form v-if="talkUnlocked" class="chat-composer" @submit.prevent="sendChatMessage">
-        <div class="chat-composer-heading">
-          <div>
-            <span>Discord Webhook</span>
-            <strong>KikiWeb on Chat</strong>
-          </div>
-          <small>{{ chatMessage.length }} / 1000</small>
-        </div>
-        <textarea
-          v-model="chatMessage"
-          maxlength="1000"
-          rows="3"
-          placeholder="Discordへ送るメッセージ"
-          aria-label="Discordへ送るメッセージ"
-        />
-        <div class="chat-composer-actions">
-          <p aria-live="polite">
-            <span v-if="chatState === 'sent'">送信しました。</span>
-            <span v-else-if="selectedServer">{{ selectedServer.name }} へ投稿</span>
-            <span v-else>接続中のサーバーを選択してください。</span>
-          </p>
-          <button
-            class="primary"
-            type="submit"
-            :disabled="chatState === 'sending' || !selectedServer || !chatMessage.trim()"
-          >
-            <Send :size="17" aria-hidden="true" />
-            {{ chatState === 'sending' ? '送信中' : '送信' }}
-          </button>
-        </div>
-        <p v-if="chatError" class="chat-error" role="alert">{{ chatError }}</p>
-      </form>
 
       <label class="field">
         <span>音量</span>
@@ -1353,6 +1453,70 @@ onBeforeUnmount(() => {
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
 
+    <aside v-if="currentPage === 'home' && talkUnlocked" class="chat-panel" aria-label="Discordチャット">
+      <header class="chat-panel-header">
+        <MessageCircle :size="21" aria-hidden="true" />
+        <div>
+          <p>Discord chat</p>
+          <h2>{{ chatChannelName || selectedServer?.channelName || '接続待ち' }}</h2>
+        </div>
+        <span class="chat-live-state" :class="chatConnectionState">
+          {{ chatConnectionState === 'connected' ? 'LIVE' : chatConnectionState === 'connecting' ? '接続中' : '待機中' }}
+        </span>
+      </header>
+
+      <div ref="chatListElement" class="chat-message-list" aria-live="polite">
+        <p v-if="chatMessages.length === 0" class="chat-empty">
+          Discordのメッセージを待っています。
+        </p>
+        <article v-for="message in chatMessages" :key="message.id" class="chat-message">
+          <span class="chat-avatar" aria-hidden="true">{{ chatInitial(message.authorName) }}</span>
+          <div>
+            <div class="chat-message-meta">
+              <strong>{{ message.authorName }}</strong>
+              <small v-if="message.webhook">WEBHOOK</small>
+              <small v-else-if="message.bot">BOT</small>
+              <time :datetime="message.timestamp">{{ chatTime(message.timestamp) }}</time>
+            </div>
+            <p>{{ message.content }}</p>
+          </div>
+        </article>
+      </div>
+
+      <form class="chat-composer" @submit.prevent="sendChatMessage">
+        <div class="chat-composer-heading">
+          <div>
+            <span>Discord Webhook</span>
+            <strong>KikiWeb on Chat</strong>
+          </div>
+          <small>{{ chatMessage.length }} / 1000</small>
+        </div>
+        <textarea
+          v-model="chatMessage"
+          maxlength="1000"
+          rows="3"
+          placeholder="Discordへ送るメッセージ"
+          aria-label="Discordへ送るメッセージ"
+        />
+        <div class="chat-composer-actions">
+          <p aria-live="polite">
+            <span v-if="chatState === 'sent'">送信しました。</span>
+            <span v-else-if="selectedServer">{{ selectedServer.name }} へ投稿</span>
+            <span v-else>接続中のサーバーを選択してください。</span>
+          </p>
+          <button
+            class="primary"
+            type="submit"
+            :disabled="chatState === 'sending' || !selectedServer || !chatMessage.trim()"
+          >
+            <Send :size="17" aria-hidden="true" />
+            {{ chatState === 'sending' ? '送信中' : '送信' }}
+          </button>
+        </div>
+        <p v-if="chatError" class="chat-error" role="alert">{{ chatError }}</p>
+      </form>
+    </aside>
+
     <article v-if="currentPage === 'guide'" class="document-panel guide-panel">
       <p class="eyebrow">Getting Started</p>
       <h1>Bot導入・使い方</h1>
@@ -1372,7 +1536,11 @@ onBeforeUnmount(() => {
       <ol class="guide-steps">
         <li>
           <strong>VC権限を確認</strong>
-          <span>Botに「チャンネルを見る」「接続」「発言」「ボイスチャンネルステータスを設定」権限を付けます。</span>
+          <span>Botに「チャンネルを見る」「接続」「発言」「メッセージ履歴を読む」「ボイスチャンネルステータスを設定」権限を付けます。</span>
+        </li>
+        <li>
+          <strong>チャット読み取りを許可</strong>
+          <span>Discord Developer PortalのBot設定で「Message Content Intent」をONにします。</span>
         </li>
       </ol>
 
@@ -1435,7 +1603,8 @@ onBeforeUnmount(() => {
       <h2>うまく接続できない場合</h2>
       <ul class="guide-checks">
         <li>Botがオンラインで、対象VCに接続しているか確認します。</li>
-        <li>Botの「チャンネルを見る」「接続」「発言」「ステータスを設定」権限を確認します。</li>
+        <li>Botの「チャンネルを見る」「接続」「発言」「メッセージ履歴を読む」「ステータスを設定」権限を確認します。</li>
+        <li>チャットが出ない場合はDeveloper Portalの「Message Content Intent」をONにしてBotを再起動します。</li>
         <li>スラッシュコマンドが出ない場合は、Botを再起動してコマンドツリーの同期を待ちます。</li>
         <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
         <li>ユーザー別音量が未取得の場合は、RelayとBotを最新版へ更新してBotをVCへ再接続します。</li>
@@ -1524,26 +1693,26 @@ onBeforeUnmount(() => {
     <article v-if="currentPage === 'terms'" class="document-panel">
       <p class="eyebrow">Terms of Service</p>
       <h1>利用規約</h1>
-      <p class="updated">最終更新日: 2026年7月29日</p>
+      <p class="updated">最終更新日: 2026年8月6日</p>
 
       <h2>1. サービスの内容</h2>
       <p>
-        KikiWeb は、設定された Discord Bot が参加しているボイスチャンネルの音声を、Web ブラウザで聞くための音声配信サービスです。
+        KikiWeb は、設定された Discord Bot が参加しているボイスチャンネルの音声をWebブラウザで聞き、設定されたDiscordチャンネルのメッセージを表示・投稿するサービスです。
       </p>
 
       <h2>2. 利用条件</h2>
       <p>
-        利用者は、Discord の利用規約、参加サーバーのルール、適用される法令を守って本サービスを利用するものとします。ボイスチャンネル参加者に対して、Bot による音声中継およびWebマイク音声の送話の目的と範囲を事前に説明してください。
+        利用者は、Discord の利用規約、参加サーバーのルール、適用される法令を守って本サービスを利用するものとします。対象チャンネルの参加者に対して、Botによる音声中継、Webマイク音声の送話、チャット表示の目的と範囲を事前に説明してください。
       </p>
 
       <h2>3. 禁止事項</h2>
       <p>
-        無断での盗聴、録音、第三者への再配信、嫌がらせ、なりすまし、不正アクセス、送話機能の不正利用、LISTEN_TOKEN や Bot トークンの共有、サービスの運用を妨げる行為を禁止します。
+        無断での盗聴、録音、チャット閲覧、第三者への再配信、嫌がらせ、なりすまし、不正アクセス、送話・投稿機能の不正利用、LISTEN_TOKEN や Bot トークンの共有、サービスの運用を妨げる行為を禁止します。
       </p>
 
       <h2>4. 認証情報の管理</h2>
       <p>
-        Discord Bot トークン、LISTEN_TOKEN、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
+        Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN、Discord Webhook URL、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
       </p>
 
       <h2>5. サービスの停止・変更</h2>
@@ -1569,12 +1738,12 @@ onBeforeUnmount(() => {
 
       <h2>1. 取得する情報</h2>
       <p>
-        KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。個別音量の設定値は利用者のブラウザ内に保存されます。
+        KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。チャット表示では、Discordのメッセージ本文、送信者ID、表示名、Bot・Webhook判定、送信時刻を一時的に扱います。個別音量の設定値は利用者のブラウザ内に保存されます。
       </p>
 
       <h2>2. 音声・チャットデータの扱い</h2>
       <p>
-        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で入力したメッセージは、指定されたDiscord Webhookへ送信するために一時的に処理されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
+        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で受信・入力したメッセージは、Web表示と指定されたDiscord Webhookへの送信のために処理され、直近50件のみRelayのメモリ上に一時保持されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
       </p>
 
       <h2>3. 利用目的</h2>

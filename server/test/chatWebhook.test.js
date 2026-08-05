@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   CHAT_MAX_LENGTH,
   CHAT_WEBHOOK_USERNAME,
+  fetchDiscordWebhookMetadata,
   isDiscordWebhookUrl,
   normalizeChatMessage,
   parseChatWebhookUrls,
@@ -33,15 +34,29 @@ test('resolves a server-specific webhook before the fallback', () => {
 
 test('posts a fixed username and disables mentions', async () => {
   let request;
-  await postDiscordChatMessage('https://discord.com/api/webhooks/123/token', 'hello', async (url, options) => {
+  const delivered = { id: '999', content: 'hello' };
+  const result = await postDiscordChatMessage('https://discord.com/api/webhooks/123/token', 'hello', async (url, options) => {
     request = { url, options };
-    return { ok: true, status: 204 };
+    return { ok: true, status: 200, json: async () => delivered };
   });
 
-  assert.equal(request.url, 'https://discord.com/api/webhooks/123/token');
+  assert.equal(request.url.toString(), 'https://discord.com/api/webhooks/123/token?wait=true');
+  assert.equal(result, delivered);
   assert.deepEqual(JSON.parse(request.options.body), {
     username: CHAT_WEBHOOK_USERNAME,
     content: 'hello',
     allowed_mentions: { parse: [] },
   });
+});
+
+test('reads the webhook guild and channel metadata', async () => {
+  const metadata = await fetchDiscordWebhookMetadata(
+    'https://discord.com/api/webhooks/123/token',
+    async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ guild_id: '111', channel_id: '222' }),
+    }),
+  );
+  assert.deepEqual(metadata, { guildId: '111', channelId: '222' });
 });

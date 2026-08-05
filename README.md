@@ -33,6 +33,15 @@ pip install -r bot_embed/requirements.txt
 
 既存 Bot に最小で差し込む場合:
 
+Botを生成する前にメッセージ内容インテントを有効にします。
+
+```python
+intents = discord.Intents.default()
+intents.voice_states = True
+intents.message_content = True
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+```
+
 ```python
 import os
 from kikiweb_voice import install_kikiweb_commands
@@ -124,6 +133,12 @@ DISCORD_CHAT_WEBHOOK_URLS={"1209781281165152277":"https://discord.com/api/webhoo
 ```
 
 サーバー別の設定が見つからない場合のみ`DISCORD_CHAT_WEBHOOK_URL`を共通の投稿先として使います。
+RelayはWebhookの投稿先チャンネルを自動取得し、Botから同じチャンネルの直近25件と新着メッセージを受信します。
+Webには直近50件をメモリ上で表示し、サーバーのファイルやデータベースには保存しません。
+
+Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。BotにはWebhook投稿先の
+「チャンネルを見る」と「メッセージ履歴を読む」権限も必要です。既存Botへ組み込む場合は、Bot生成時の
+`discord.Intents`でも`message_content = True`を設定して再起動します。
 
 ## Render
 

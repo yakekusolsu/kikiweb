@@ -7,6 +7,7 @@ from kikiweb_voice import install_kikiweb_commands
 
 intents = discord.Intents.default()
 intents.voice_states = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 

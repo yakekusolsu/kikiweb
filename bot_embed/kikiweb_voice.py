@@ -224,8 +224,10 @@ class KikiWebVoiceRelay:
         self.session: Optional[aiohttp.ClientSession] = None
         self.socket: Optional[aiohttp.ClientWebSocketResponse] = None
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=config.queue_size)
+        self.chat_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=100)
         self.sender_task: Optional[asyncio.Task[None]] = None
         self.incoming_task: Optional[asyncio.Task[None]] = None
+        self.chat_history_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
         self.listen_watchdog_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_lock = asyncio.Lock()
@@ -237,6 +239,7 @@ class KikiWebVoiceRelay:
         self.server_name = ""
         self.channel_id = 0
         self.channel_name = ""
+        self.chat_channel_id = 0
         self.web_audio_source = KikiWebWebAudioSource()
 
     async def _set_voice_status(
@@ -264,6 +267,9 @@ class KikiWebVoiceRelay:
         self.server_name = channel.guild.name
         self.channel_id = channel.id
         self.channel_name = channel.name
+        if metadata_changed:
+            self.chat_channel_id = channel.id
+            self.clear_chat_queue()
 
         if not self.session or self.session.closed:
             self.session = aiohttp.ClientSession()
@@ -343,6 +349,11 @@ class KikiWebVoiceRelay:
             with contextlib.suppress(asyncio.CancelledError):
                 await self.incoming_task
 
+        if self.chat_history_task:
+            self.chat_history_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.chat_history_task
+
         if self.listen_restart_task:
             self.listen_restart_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -367,8 +378,10 @@ class KikiWebVoiceRelay:
         self.listen_restart_task = None
         self.listen_watchdog_task = None
         self.incoming_task = None
+        self.chat_history_task = None
         self.stop_web_audio()
         self.clear_audio_queue()
+        self.clear_chat_queue()
 
     def note_voice_packet(self) -> None:
         self.last_voice_packet_at = time.monotonic()
@@ -392,6 +405,80 @@ class KikiWebVoiceRelay:
                 self.queue.task_done()
             except asyncio.QueueEmpty:
                 break
+
+    def clear_chat_queue(self) -> None:
+        while True:
+            try:
+                self.chat_queue.get_nowait()
+                self.chat_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+    def enqueue_chat_message(self, message: discord.Message) -> None:
+        if self.closed.is_set() or message.guild is None or message.guild.id != self.server_id:
+            return
+        if message.channel.id != self.chat_channel_id:
+            return
+
+        content = message.content.strip()
+        if not content and message.attachments:
+            attachment_names = ", ".join(attachment.filename for attachment in message.attachments[:5])
+            content = f"[添付ファイル] {attachment_names}"
+        if not content:
+            return
+
+        author = message.author
+        payload: dict[str, object] = {
+            "type": "chat-message",
+            "id": str(message.id),
+            "channelId": str(message.channel.id),
+            "channelName": getattr(message.channel, "name", "Discord chat"),
+            "authorId": str(author.id),
+            "authorName": (
+                getattr(author, "global_name", None)
+                or getattr(author, "display_name", None)
+                or author.name
+            ),
+            "bot": bool(author.bot),
+            "webhook": message.webhook_id is not None,
+            "content": content[:2_000],
+            "timestamp": message.created_at.isoformat(),
+        }
+        if self.chat_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.chat_queue.get_nowait()
+                self.chat_queue.task_done()
+        self.chat_queue.put_nowait(payload)
+
+    def _schedule_chat_history(self) -> None:
+        if self.chat_history_task and not self.chat_history_task.done():
+            self.chat_history_task.cancel()
+        self.chat_history_task = asyncio.create_task(
+            self._load_chat_history(),
+            name=f"kikiweb-chat-history-{self.server_id}",
+        )
+
+    async def _load_chat_history(self) -> None:
+        if not self.voice_client or not self.chat_channel_id:
+            return
+        client = self.voice_client.client
+        channel = client.get_channel(self.chat_channel_id)
+        if channel is None:
+            with contextlib.suppress(discord.HTTPException):
+                channel = await client.fetch_channel(self.chat_channel_id)
+        history = getattr(channel, "history", None)
+        if not callable(history):
+            return
+
+        try:
+            async for message in history(limit=25, oldest_first=True):
+                self.enqueue_chat_message(message)
+        except discord.Forbidden:
+            LOGGER.warning(
+                "KikiWeb cannot read Discord chat. Give the Bot View Channel and Read Message History permissions."
+            )
+        except discord.HTTPException as error:
+            LOGGER.warning("KikiWeb could not load Discord chat history: %s", error)
 
     def play_web_audio(self, pcm: bytes) -> None:
         if (
@@ -426,6 +513,18 @@ class KikiWebVoiceRelay:
                     continue
                 if payload.get("type") == "talk-stop":
                     self.stop_web_audio()
+                elif payload.get("type") == "chat-channel":
+                    try:
+                        channel_id = int(payload.get("channelId", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if channel_id <= 0:
+                        continue
+                    changed = self.chat_channel_id != channel_id
+                    self.chat_channel_id = channel_id
+                    if changed:
+                        self.clear_chat_queue()
+                    self._schedule_chat_history()
 
     def _enqueue_pcm_in_loop(
         self,
@@ -652,6 +751,13 @@ class KikiWebVoiceRelay:
                             await socket.send_json(self._voice_status())
                             next_status_at = now + self.config.status_interval
 
+                        while not self.chat_queue.empty():
+                            payload = self.chat_queue.get_nowait()
+                            try:
+                                await socket.send_json(payload)
+                            finally:
+                                self.chat_queue.task_done()
+
                         try:
                             frame = await asyncio.wait_for(self.queue.get(), timeout=1)
                         except asyncio.TimeoutError:
@@ -812,6 +918,13 @@ class KikiWebRelayManager:
 
         await relay.play_soundboard(effect.sound.url, effect.sound.volume)
 
+    async def relay_chat_message(self, message: discord.Message) -> None:
+        if message.guild is None:
+            return
+        relay = self.relays.get(message.guild.id)
+        if relay is not None:
+            relay.enqueue_chat_message(message)
+
 
 def install_kikiweb_commands(
     bot,
@@ -935,6 +1048,10 @@ def install_kikiweb_commands(
     @bot.listen("on_voice_channel_effect")
     async def kikiweb_soundboard(effect):
         await manager.play_soundboard_effect(effect)
+
+    @bot.listen("on_message")
+    async def kikiweb_chat_message(message):
+        await manager.relay_chat_message(message)
 
     @bot.listen("on_ready")
     async def kikiweb_auto_join_ready():

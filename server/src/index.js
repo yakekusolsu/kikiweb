@@ -1,8 +1,10 @@
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
+import { appendChatMessage, normalizeDiscordChatMessage } from './chatMessages.js';
 import {
   CHAT_MAX_LENGTH,
+  fetchDiscordWebhookMetadata,
   normalizeChatMessage,
   parseChatWebhookUrls,
   postDiscordChatMessage,
@@ -14,6 +16,7 @@ const STREAM_VOICE = 0;
 const STREAM_SOUNDBOARD = 1;
 const streams = new Map();
 const chatWebhookUrls = parseChatWebhookUrls(config.chatWebhookUrls, config.chatWebhookUrl);
+const chatWebhookMetadata = new Map();
 const chatRateLimits = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
@@ -86,9 +89,41 @@ const server = createServer(async (request, response) => {
       sendJson(response, 429, { ok: false, error: 'Please wait before sending another message.' });
       return;
     }
+    try {
+      const metadata = await getChatWebhookMetadata(webhookUrl);
+      if (metadata.guildId !== serverId) {
+        sendJson(response, 409, { ok: false, error: 'The Discord webhook belongs to a different server.' });
+        return;
+      }
+      setStreamChatChannel(stream, metadata.channelId);
+    } catch (error) {
+      console.error('KikiWeb could not validate the Discord webhook:', error instanceof Error ? error.message : error);
+      sendJson(response, 502, { ok: false, error: 'The Discord webhook could not be validated.' });
+      return;
+    }
 
     try {
-      await postDiscordChatMessage(webhookUrl, content);
+      const delivered = await postDiscordChatMessage(webhookUrl, content);
+      const deliveredChannelId = String(delivered?.channel_id ?? '');
+      if (/^\d{1,20}$/.test(deliveredChannelId)) {
+        setStreamChatChannel(stream, deliveredChannelId);
+      }
+      const chatMessage = normalizeDiscordChatMessage(
+        {
+          type: 'chat-message',
+          id: delivered?.id,
+          channelId: deliveredChannelId,
+          channelName: stream.chatChannelName,
+          authorId: delivered?.author?.id,
+          authorName: delivered?.author?.username ?? 'KikiWeb on Chat',
+          bot: true,
+          webhook: true,
+          content: delivered?.content ?? content,
+          timestamp: delivered?.timestamp,
+        },
+        stream.chatChannelId,
+      );
+      if (chatMessage) publishChatMessage(stream, chatMessage);
       sendJson(response, 200, { ok: true });
     } catch (error) {
       console.error('KikiWeb chat webhook failed:', error instanceof Error ? error.message : error);
@@ -193,6 +228,10 @@ const streamFromIngestUrl = (url) => {
       voiceStatus,
       ingestClient: null,
       talkClient: null,
+      chatClients: new Set(),
+      chatMessages: [],
+      chatChannelId: channelId,
+      chatChannelName: channelName,
       lastIngestAt: 0,
       memberCount: 0,
       mutedCount: 0,
@@ -202,10 +241,15 @@ const streamFromIngestUrl = (url) => {
     };
     streams.set(id, stream);
   } else {
+    const channelChanged = stream.channelId !== channelId;
     stream.name = name;
     stream.channelId = channelId;
     stream.channelName = channelName;
     stream.voiceStatus = voiceStatus;
+    if (channelChanged) {
+      stream.chatMessages = [];
+      setStreamChatChannel(stream, channelId, channelName);
+    }
   }
   return stream;
 };
@@ -217,6 +261,67 @@ const resolveAudioStream = (url) => {
     return stream?.ingestClient ? stream : null;
   }
   return [...streams.values()].find((stream) => stream.ingestClient) ?? null;
+};
+
+const sendChatSnapshot = (client, stream) => {
+  if (client.readyState !== WebSocket.OPEN) return;
+  client.send(
+    JSON.stringify({
+      type: 'chat-snapshot',
+      channelId: stream.chatChannelId,
+      channelName: stream.chatChannelName,
+      messages: stream.chatMessages,
+    }),
+  );
+};
+
+const publishChatMessage = (stream, message) => {
+  appendChatMessage(stream.chatMessages, message);
+  const payload = JSON.stringify({ type: 'chat-message', message });
+  for (const client of stream.chatClients) {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  }
+};
+
+const setStreamChatChannel = (stream, channelId, channelName = '') => {
+  if (!/^\d{1,20}$/.test(channelId)) return;
+  const changed = stream.chatChannelId !== channelId;
+  stream.chatChannelId = channelId;
+  stream.chatChannelName = safeLabel(channelName, stream.chatChannelName || 'Discord chat');
+  if (changed) stream.chatMessages = [];
+
+  if (stream.ingestClient?.readyState === WebSocket.OPEN) {
+    stream.ingestClient.send(JSON.stringify({ type: 'chat-channel', channelId }));
+  }
+  for (const client of stream.chatClients) sendChatSnapshot(client, stream);
+};
+
+const getChatWebhookMetadata = async (webhookUrl) => {
+  let metadata = chatWebhookMetadata.get(webhookUrl);
+  if (!metadata) {
+    metadata = await fetchDiscordWebhookMetadata(webhookUrl);
+    chatWebhookMetadata.set(webhookUrl, metadata);
+  }
+  return metadata;
+};
+
+const configureStreamChatChannel = async (stream) => {
+  const webhookUrl = resolveChatWebhookUrl(chatWebhookUrls, stream.id);
+  if (!webhookUrl) {
+    setStreamChatChannel(stream, stream.channelId, stream.channelName);
+    return;
+  }
+
+  try {
+    const metadata = await getChatWebhookMetadata(webhookUrl);
+    if (metadata.guildId !== stream.id) {
+      throw new Error('The configured webhook belongs to a different Discord server.');
+    }
+    setStreamChatChannel(stream, metadata.channelId);
+  } catch (error) {
+    console.error('KikiWeb could not resolve the Discord chat channel:', error instanceof Error ? error.message : error);
+    setStreamChatChannel(stream, stream.channelId, stream.channelName);
+  }
 };
 
 const parseCount = (value) => {
@@ -315,13 +420,18 @@ const sendJson = (response, statusCode, body) => {
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-  if (url.pathname !== '/audio' && url.pathname !== '/ingest' && url.pathname !== '/talk') {
+  if (
+    url.pathname !== '/audio' &&
+    url.pathname !== '/ingest' &&
+    url.pathname !== '/talk' &&
+    url.pathname !== '/chat-stream'
+  ) {
     socket.destroy();
     return;
   }
 
   if (
-    url.pathname === '/talk' &&
+    (url.pathname === '/talk' || url.pathname === '/chat-stream') &&
     config.clientOrigin !== '*' &&
     request.headers.origin !== config.clientOrigin
   ) {
@@ -333,11 +443,11 @@ server.on('upgrade', (request, socket, head) => {
   const expectedToken =
     url.pathname === '/ingest'
       ? config.ingestToken
-      : url.pathname === '/talk'
+      : url.pathname === '/talk' || url.pathname === '/chat-stream'
         ? config.talkToken
         : config.listenToken;
   if (
-    (url.pathname === '/talk' && !expectedToken) ||
+    ((url.pathname === '/talk' || url.pathname === '/chat-stream') && !expectedToken) ||
     (expectedToken && url.searchParams.get('token') !== expectedToken)
   ) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -366,17 +476,25 @@ wss.on('connection', (ws, _request, url) => {
     stream.memberCount = 0;
     stream.mutedCount = 0;
     stream.users = [];
+    void configureStreamChatChannel(stream);
     ws.on('message', (message, isBinary) => {
       if (!isBinary) {
         try {
           const payload = JSON.parse(message.toString());
-          if (payload.type !== 'voice-status') return;
-          const memberCount = parseCount(payload.memberCount);
-          const mutedCount = parseCount(payload.mutedCount);
-          if (memberCount === null || mutedCount === null) return;
-          stream.memberCount = memberCount;
-          stream.mutedCount = Math.min(mutedCount, memberCount);
-          stream.users = parseVoiceUsers(payload.users);
+          if (payload.type === 'voice-status') {
+            const memberCount = parseCount(payload.memberCount);
+            const mutedCount = parseCount(payload.mutedCount);
+            if (memberCount === null || mutedCount === null) return;
+            stream.memberCount = memberCount;
+            stream.mutedCount = Math.min(mutedCount, memberCount);
+            stream.users = parseVoiceUsers(payload.users);
+          } else if (payload.type === 'chat-message') {
+            const chatMessage = normalizeDiscordChatMessage(payload, stream.chatChannelId);
+            if (chatMessage) {
+              stream.chatChannelName = chatMessage.channelName;
+              publishChatMessage(stream, chatMessage);
+            }
+          }
         } catch {
           // Ignore malformed status messages while keeping the audio stream alive.
         }
@@ -429,6 +547,19 @@ wss.on('connection', (ws, _request, url) => {
         channels: CHANNELS,
       }),
     );
+    return;
+  }
+
+  if (url.pathname === '/chat-stream') {
+    const stream = resolveAudioStream(url);
+    if (!stream) {
+      ws.close(1013, 'No Discord server is connected.');
+      return;
+    }
+
+    stream.chatClients.add(ws);
+    sendChatSnapshot(ws, stream);
+    ws.on('close', () => stream.chatClients.delete(ws));
     return;
   }
 
@@ -515,6 +646,9 @@ wss.on('connection', (ws, _request, url) => {
 const heartbeat = setInterval(() => {
   for (const stream of streams.values()) {
     stream.mixer.heartbeat();
+    for (const client of stream.chatClients) {
+      if (client.readyState === WebSocket.OPEN) client.ping();
+    }
   }
 }, 30_000);
 
@@ -523,6 +657,7 @@ const shutdown = async () => {
   for (const stream of streams.values()) {
     stream.ingestClient?.close();
     stream.talkClient?.close();
+    for (const client of stream.chatClients) client.close();
     stream.mixer.close();
     stream.soundboardMixer.close();
   }

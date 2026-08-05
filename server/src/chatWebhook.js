@@ -44,7 +44,9 @@ export const parseChatWebhookUrls = (rawMap, fallbackUrl = '') => {
 export const resolveChatWebhookUrl = (urls, serverId) => urls.get(serverId) ?? urls.get('*') ?? null;
 
 export const postDiscordChatMessage = async (webhookUrl, content, fetchImpl = fetch) => {
-  const result = await fetchImpl(webhookUrl, {
+  const requestUrl = new URL(webhookUrl);
+  requestUrl.searchParams.set('wait', 'true');
+  const result = await fetchImpl(requestUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -57,4 +59,23 @@ export const postDiscordChatMessage = async (webhookUrl, content, fetchImpl = fe
   if (!result.ok) {
     throw new Error(`Discord webhook returned status ${result.status}`);
   }
+  return result.json();
+};
+
+export const fetchDiscordWebhookMetadata = async (webhookUrl, fetchImpl = fetch) => {
+  const result = await fetchImpl(webhookUrl, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!result.ok) {
+    throw new Error(`Discord webhook metadata returned status ${result.status}`);
+  }
+
+  const payload = await result.json();
+  const guildId = String(payload?.guild_id ?? '');
+  const channelId = String(payload?.channel_id ?? '');
+  if (!/^\d{1,20}$/.test(guildId) || !/^\d{1,20}$/.test(channelId)) {
+    throw new Error('Discord webhook metadata did not contain a valid guild and channel.');
+  }
+  return { guildId, channelId };
 };
