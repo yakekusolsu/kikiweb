@@ -41,10 +41,15 @@ install_kikiweb_commands(
     bot,
     relay_url=os.environ["KIKIWEB_RELAY_URL"],
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
+    use_slash_commands=True,
 )
+
+@bot.event
+async def setup_hook():
+    await bot.tree.sync()
 ```
 
-`!kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`!kikiweb_leave` で停止します。
+`/kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`/kikiweb_leave` で停止します。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 
 ### KikiWeb 専用 Bot
@@ -67,7 +72,7 @@ Bot接続中は`KIKIWEB_VOICE_STATUS`の文言をDiscordのVCステータスとW
 Botには対象VCの「ボイスチャンネルステータスを設定」権限が必要です。
 
 ブラウザからVCへ送話する場合は、BotにVCでの「発言」権限を与え、最新版の`kikiweb_voice.py`へ更新後に
-一度`!kikiweb_leave`してから`!kikiweb_join`してください。既に接続済みのBotは、再接続するまでミュート状態が
+一度`/kikiweb_leave`してから`/kikiweb_join`してください。既に接続済みのBotは、再接続するまでミュート状態が
 更新されません。
 
 ### 複数サーバー

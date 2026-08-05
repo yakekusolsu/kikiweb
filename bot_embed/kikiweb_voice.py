@@ -728,7 +728,7 @@ def install_kikiweb_commands(
     ingest_token: str = "",
     voice_status: str = "試聴完全自由！",
     command_prefix: str = "kikiweb",
-    use_slash_commands: bool = False,
+    use_slash_commands: bool = True,
 ) -> KikiWebRelayManager:
     manager = KikiWebRelayManager(
         KikiWebConfig(
