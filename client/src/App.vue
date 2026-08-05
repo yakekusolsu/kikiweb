@@ -1300,6 +1300,14 @@ onBeforeUnmount(() => {
           <strong>中継を終了</strong>
           <span>Discordで <code>/kikiweb_leave</code> を実行すると、BotがVCから退出します。</span>
         </li>
+        <li>
+          <strong>自動参加を設定</strong>
+          <span><code>/kikiweb_auto enabled:true channel:&lt;VC&gt;</code>で、Bot起動時や切断後にも指定VCへ自動参加します。</span>
+        </li>
+        <li>
+          <strong>自動参加を解除</strong>
+          <span><code>/kikiweb_auto enabled:false</code>で解除します。現在の接続は<code>/kikiweb_leave</code>で終了します。</span>
+        </li>
       </ol>
 
       <h2>うまく接続できない場合</h2>

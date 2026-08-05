@@ -9,3 +9,5 @@ dist-firefox
 *.timestamp-*.mjs
 __pycache__
 *.pyc
+kikiweb_auto_join.json
+kikiweb_auto_join.json.tmp

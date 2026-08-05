@@ -8,6 +8,7 @@ import queue
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -683,9 +684,100 @@ class KikiWebVoiceRelay:
 
 
 class KikiWebRelayManager:
-    def __init__(self, config: KikiWebConfig) -> None:
+    def __init__(
+        self,
+        config: KikiWebConfig,
+        *,
+        auto_join_path: str | Path = "kikiweb_auto_join.json",
+    ) -> None:
         self.config = config
         self.relays: dict[int, KikiWebVoiceRelay] = {}
+        self.auto_join_path = Path(auto_join_path)
+        self.auto_join_channels = self._load_auto_join_channels()
+        self.auto_join_lock = asyncio.Lock()
+
+    def _load_auto_join_channels(self) -> dict[int, int]:
+        try:
+            payload = json.loads(self.auto_join_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, TypeError):
+            LOGGER.exception("KikiWeb could not load auto-join settings from %s", self.auto_join_path)
+            return {}
+
+        if not isinstance(payload, dict):
+            return {}
+
+        channels: dict[int, int] = {}
+        for raw_guild_id, raw_channel_id in payload.items():
+            try:
+                guild_id = int(raw_guild_id)
+                channel_id = int(raw_channel_id)
+            except (TypeError, ValueError):
+                continue
+            if guild_id > 0 and channel_id > 0:
+                channels[guild_id] = channel_id
+        return channels
+
+    def _save_auto_join_channels(self) -> None:
+        self.auto_join_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.auto_join_path.with_suffix(f"{self.auto_join_path.suffix}.tmp")
+        payload = {str(guild_id): channel_id for guild_id, channel_id in self.auto_join_channels.items()}
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(self.auto_join_path)
+
+    def enable_auto_join(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
+        self.auto_join_channels[channel.guild.id] = channel.id
+        self._save_auto_join_channels()
+
+    def disable_auto_join(self, guild_id: int) -> bool:
+        removed = self.auto_join_channels.pop(guild_id, None) is not None
+        if removed:
+            self._save_auto_join_channels()
+        return removed
+
+    async def connect_auto_channels(
+        self,
+        bot,
+        *,
+        allowed_guild_ids: Optional[set[int] | frozenset[int]] = None,
+    ) -> None:
+        async with self.auto_join_lock:
+            for guild_id, channel_id in list(self.auto_join_channels.items()):
+                if allowed_guild_ids and guild_id not in allowed_guild_ids:
+                    continue
+                channel = bot.get_channel(channel_id)
+                if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+                    LOGGER.warning(
+                        "KikiWeb auto-join channel is unavailable: guild=%s, channel=%s",
+                        guild_id,
+                        channel_id,
+                    )
+                    continue
+                relay = self.relays.get(guild_id)
+                voice_client = relay.voice_client if relay is not None else None
+                if (
+                    voice_client is not None
+                    and voice_client.is_connected()
+                    and getattr(voice_client.channel, "id", None) == channel_id
+                ):
+                    continue
+                try:
+                    await self.connect(channel)
+                    LOGGER.info(
+                        "KikiWeb auto-joined voice channel: guild=%s, channel=%s",
+                        guild_id,
+                        channel_id,
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "KikiWeb could not auto-join voice channel: guild=%s, channel=%s",
+                        guild_id,
+                        channel_id,
+                    )
 
     async def connect(
         self,
@@ -729,13 +821,15 @@ def install_kikiweb_commands(
     voice_status: str = "試聴完全自由！",
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = True,
+    auto_join_path: str | Path = "kikiweb_auto_join.json",
 ) -> KikiWebRelayManager:
     manager = KikiWebRelayManager(
         KikiWebConfig(
             relay_url=relay_url,
             ingest_token=ingest_token,
             voice_status=voice_status,
-        )
+        ),
+        auto_join_path=auto_join_path,
     )
 
     if use_slash_commands:
@@ -763,6 +857,65 @@ def install_kikiweb_commands(
 
             await manager.disconnect(interaction.guild.id)
             await interaction.response.send_message("KikiWeb への音声中継を停止しました。")
+
+        @tree.command(name=f"{command_prefix}_auto", description="指定VCへの自動参加を設定します")
+        @discord.app_commands.guild_only()
+        @discord.app_commands.default_permissions(manage_guild=True)
+        @discord.app_commands.describe(
+            enabled="trueで自動参加を有効、falseで無効にします",
+            channel="自動参加するボイスチャンネル（trueの場合）",
+        )
+        async def kikiweb_auto(
+            interaction: discord.Interaction,
+            enabled: bool,
+            channel: Optional[discord.VoiceChannel] = None,
+        ) -> None:
+            if not interaction.guild:
+                await interaction.response.send_message("サーバー内で実行してください。", ephemeral=True)
+                return
+
+            member = interaction.user
+            if not isinstance(member, discord.Member) or not member.guild_permissions.manage_guild:
+                await interaction.response.send_message("サーバー管理権限が必要です。", ephemeral=True)
+                return
+
+            if not enabled:
+                removed = manager.disable_auto_join(interaction.guild.id)
+                message = (
+                    "KikiWebの自動参加を無効にしました。現在の接続は /kikiweb_leave で終了できます。"
+                    if removed
+                    else "このサーバーでは自動参加は設定されていません。"
+                )
+                await interaction.response.send_message(message, ephemeral=True)
+                return
+
+            target_channel = channel
+            if target_channel is None:
+                voice = getattr(member, "voice", None)
+                if isinstance(getattr(voice, "channel", None), discord.VoiceChannel):
+                    target_channel = voice.channel
+            if target_channel is None:
+                await interaction.response.send_message(
+                    "自動参加するVCを選択するか、そのVCに参加してから実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await manager.connect(target_channel)
+                manager.enable_auto_join(target_channel)
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not enable auto-join")
+                await interaction.followup.send(
+                    f"自動参加の設定に失敗しました: {error}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                f"{target_channel.name} への自動参加を有効にしました。",
+                ephemeral=True,
+            )
     else:
 
         @bot.command(name=f"{command_prefix}_join")
@@ -782,5 +935,29 @@ def install_kikiweb_commands(
     @bot.listen("on_voice_channel_effect")
     async def kikiweb_soundboard(effect):
         await manager.play_soundboard_effect(effect)
+
+    @bot.listen("on_ready")
+    async def kikiweb_auto_join_ready():
+        await manager.connect_auto_channels(bot)
+
+    @bot.listen("on_voice_state_update")
+    async def kikiweb_auto_rejoin(member, before, after):
+        bot_user = getattr(bot, "user", None)
+        if (
+            bot_user is None
+            or member.id != bot_user.id
+            or before.channel is None
+            or after.channel is not None
+        ):
+            return
+
+        guild_id = member.guild.id
+        await asyncio.sleep(2)
+        voice_client = member.guild.voice_client
+        if voice_client is not None and voice_client.is_connected():
+            return
+        await manager.disconnect(guild_id)
+        if guild_id in manager.auto_join_channels:
+            await manager.connect_auto_channels(bot)
 
     return manager

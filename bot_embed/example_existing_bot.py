@@ -16,6 +16,7 @@ install_kikiweb_commands(
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
     voice_status=os.environ.get("KIKIWEB_VOICE_STATUS", "試聴完全自由！"),
     use_slash_commands=True,
+    auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
 )
 
 

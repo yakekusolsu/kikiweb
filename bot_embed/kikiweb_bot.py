@@ -39,6 +39,7 @@ discord_token = os.getenv("DISCORD_TOKEN", "")
 relay_url = os.getenv("KIKIWEB_RELAY_URL", "wss://kikiweb.onrender.com/ingest")
 ingest_token = os.getenv("KIKIWEB_INGEST_TOKEN", "")
 voice_status = os.getenv("KIKIWEB_VOICE_STATUS", "試聴完全自由！")
+auto_join_file = os.getenv("KIKIWEB_AUTO_JOIN_FILE", "/home/container/kikiweb_auto_join.json")
 
 if not discord_token:
     raise RuntimeError("DISCORD_TOKEN is required. Set it in /home/container/.env.")
@@ -54,6 +55,7 @@ install_kikiweb_commands(
     ingest_token=ingest_token,
     voice_status=voice_status,
     use_slash_commands=True,
+    auto_join_path=auto_join_file,
 )
 
 commands_synced = False

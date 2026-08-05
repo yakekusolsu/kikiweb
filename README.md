@@ -42,6 +42,7 @@ install_kikiweb_commands(
     relay_url=os.environ["KIKIWEB_RELAY_URL"],
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
     use_slash_commands=True,
+    auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
 )
 
 @bot.event
@@ -50,6 +51,8 @@ async def setup_hook():
 ```
 
 `/kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`/kikiweb_leave` で停止します。
+`/kikiweb_auto enabled:true channel:<VC>`で指定VCへの自動参加を保存し、Bot起動時や切断後にも再接続します。
+`/kikiweb_auto enabled:false`で自動参加を解除できます。設定変更にはサーバー管理権限が必要です。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 
 ### KikiWeb 専用 Bot
@@ -63,6 +66,7 @@ DISCORD_TOKEN=Discord Bot token
 KIKIWEB_RELAY_URL=wss://kikiweb.onrender.com/ingest
 KIKIWEB_INGEST_TOKEN=Render の INGEST_TOKEN と同じ値
 KIKIWEB_VOICE_STATUS=試聴完全自由！
+KIKIWEB_AUTO_JOIN_FILE=/home/container/kikiweb_auto_join.json
 DISCORD_GUILD_ID=コマンドをすぐ反映したいサーバーID
 ```
 
@@ -87,7 +91,7 @@ Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を 
 KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 ```
 
-追加サーバーでは `/kikiweb_join` と `/kikiweb_leave` だけが同期されます。サーバー管理権限を持つ
+追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto` が同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
 
 ### サウンドボード
