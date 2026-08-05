@@ -565,7 +565,7 @@ class KikiWebVoiceRelay:
             "users": [
                 {
                     "id": str(member.id),
-                    "name": member.display_name,
+                    "name": getattr(member, "global_name", None) or member.name,
                     "bot": member.bot,
                     "muted": bool(
                         member.voice is not None
