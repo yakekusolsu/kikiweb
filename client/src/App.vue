@@ -37,9 +37,9 @@ type ApiStatus = {
   };
 };
 
-type TalkVoicePreset = 'normal' | 'feminine' | 'masculine' | 'robot';
+type TalkVoicePreset = 'normal' | 'feminine' | 'masculine' | 'robot' | 'minions' | 'chorus';
 
-const talkVoicePresets: TalkVoicePreset[] = ['normal', 'feminine', 'masculine', 'robot'];
+const talkVoicePresets: TalkVoicePreset[] = ['normal', 'feminine', 'masculine', 'robot', 'minions', 'chorus'];
 const talkVoicePresetSettings: Record<
   TalkVoicePreset,
   { highpass: number; bodyFrequency: number; bodyGain: number; presenceFrequency: number; presenceGain: number }
@@ -48,6 +48,8 @@ const talkVoicePresetSettings: Record<
   feminine: { highpass: 125, bodyFrequency: 240, bodyGain: -5, presenceFrequency: 3_200, presenceGain: 4 },
   masculine: { highpass: 45, bodyFrequency: 180, bodyGain: 5, presenceFrequency: 2_800, presenceGain: -2 },
   robot: { highpass: 80, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
+  minions: { highpass: 180, bodyFrequency: 300, bodyGain: -7, presenceFrequency: 4_200, presenceGain: 6 },
+  chorus: { highpass: 45, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 2 },
 };
 
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
@@ -491,7 +493,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=9');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=10');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,
@@ -875,6 +877,22 @@ onBeforeUnmount(() => {
             @click="talkVoicePreset = 'robot'"
           >
             ロボット
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'minions' }"
+            :aria-pressed="talkVoicePreset === 'minions'"
+            @click="talkVoicePreset = 'minions'"
+          >
+            ミニオンズ
+          </button>
+          <button
+            type="button"
+            :class="{ active: talkVoicePreset === 'chorus' }"
+            :aria-pressed="talkVoicePreset === 'chorus'"
+            @click="talkVoicePreset = 'chorus'"
+          >
+            コーラス
           </button>
         </div>
       </fieldset>

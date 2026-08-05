@@ -165,7 +165,14 @@ class KikiWebPcmPlayer extends AudioWorkletProcessor {
 
 registerProcessor("kikiweb-pcm-player", KikiWebPcmPlayer);
 
-const KIKIWEB_VOICE_PRESETS = new Set(["normal", "feminine", "masculine", "robot"]);
+const KIKIWEB_VOICE_PRESETS = new Set([
+  "normal",
+  "feminine",
+  "masculine",
+  "robot",
+  "minions",
+  "chorus",
+]);
 
 function normalizeVoicePreset(value) {
   return KIKIWEB_VOICE_PRESETS.has(value) ? value : "normal";
@@ -185,6 +192,12 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.pitch = Math.max(0.7, Math.min(1.5, Number(options?.processorOptions?.pitch) || 1));
     this.voicePreset = normalizeVoicePreset(options?.processorOptions?.voicePreset);
     this.robotPhase = 0;
+    this.chorusPhase = 0;
+    this.chorusRingSize = 4_096;
+    this.chorusRingMask = this.chorusRingSize - 1;
+    this.chorusLeftRing = new Float32Array(this.chorusRingSize);
+    this.chorusRightRing = new Float32Array(this.chorusRingSize);
+    this.chorusWritePosition = 0;
     this.gateGain = 0;
     this.gateHoldFrames = 0;
     this.ringSize = 32_768;
@@ -228,8 +241,16 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
-    const presetPitch = this.voicePreset === "feminine" ? 1.14 : this.voicePreset === "masculine" ? 0.86 : 1;
-    const sourcePosition = grainStart - this.latencyFrames + grainOffset * this.pitch * presetPitch;
+    const presetPitch =
+      this.voicePreset === "feminine"
+        ? 1.14
+        : this.voicePreset === "masculine"
+          ? 0.86
+          : this.voicePreset === "minions"
+            ? 1.36
+            : 1;
+    const effectivePitch = Math.min(1.75, Math.max(0.6, this.pitch * presetPitch));
+    const sourcePosition = grainStart - this.latencyFrames + grainOffset * effectivePitch;
     return this.readRing(buffer, sourcePosition) * window;
   }
 
@@ -244,6 +265,36 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       );
     }
     return mixedSample / (this.grainOverlapCount / 2);
+  }
+
+  readChorusRing(buffer, delaySamples) {
+    const position = this.chorusWritePosition - delaySamples;
+    const lower = Math.floor(position);
+    const fraction = position - lower;
+    const current = buffer[lower & this.chorusRingMask];
+    const next = buffer[(lower + 1) & this.chorusRingMask];
+    return current + (next - current) * fraction;
+  }
+
+  applyChorus(leftSample, rightSample) {
+    this.chorusLeftRing[this.chorusWritePosition & this.chorusRingMask] = leftSample;
+    this.chorusRightRing[this.chorusWritePosition & this.chorusRingMask] = rightSample;
+
+    if (this.voicePreset !== "chorus") {
+      this.chorusWritePosition += 1;
+      return [leftSample, rightSample];
+    }
+
+    const baseDelay = sampleRate * 0.021;
+    const depth = sampleRate * 0.006;
+    const leftDelay = baseDelay + Math.sin(this.chorusPhase) * depth;
+    const rightDelay = baseDelay + Math.sin(this.chorusPhase + Math.PI) * depth;
+    const leftWet = this.readChorusRing(this.chorusLeftRing, leftDelay);
+    const rightWet = this.readChorusRing(this.chorusRightRing, rightDelay);
+    this.chorusPhase += (Math.PI * 2 * 0.72) / sampleRate;
+    if (this.chorusPhase >= Math.PI * 2) this.chorusPhase -= Math.PI * 2;
+    this.chorusWritePosition += 1;
+    return [leftSample * 0.72 + leftWet * 0.32, rightSample * 0.72 + rightWet * 0.32];
   }
 
   process(inputs, outputs) {
@@ -281,6 +332,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
           this.robotPhase += (Math.PI * 2 * 72) / sampleRate;
           if (this.robotPhase >= Math.PI * 2) this.robotPhase -= Math.PI * 2;
         }
+        [leftShifted, rightShifted] = this.applyChorus(leftShifted, rightShifted);
         const leftSample = Math.tanh(leftShifted * this.gateGain * this.speechGain);
         const rightSample = Math.tanh(rightShifted * this.gateGain * this.speechGain);
         pcm[index * 2] = leftSample * 32767;
