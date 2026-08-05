@@ -97,6 +97,19 @@ const talkVoicePresets: TalkVoicePreset[] = [
   'boy',
   'asmr',
 ];
+const talkVoicePresetLabels: Record<TalkVoicePreset, string> = {
+  normal: '通常',
+  feminine: '女声',
+  masculine: '男声',
+  robot: 'ロボット',
+  minions: 'ミニオンズ',
+  chorus: 'コーラス',
+  'natural-low': '自然な低音',
+  bright: '明るい声',
+  radio: 'ラジオ',
+  boy: '少年',
+  asmr: 'ASMR',
+};
 const talkVoicePresetSettings: Record<
   TalkVoicePreset,
   TalkVoicePresetSettings
@@ -129,6 +142,8 @@ const playerError = ref('');
 const volume = ref(85);
 const userVolumes = ref<Record<string, number>>({});
 const userVolumesOpen = ref(false);
+const voicePresetOpen = ref(false);
+const talkProcessingOpen = ref(false);
 const bufferMs = ref(0);
 const underruns = ref(0);
 const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') !== 'off');
@@ -174,6 +189,18 @@ const talkMicBoost = ref(storedToggle('kikiweb-talk-mic-boost', false));
 const talkEchoCancellation = ref(storedToggle('kikiweb-talk-echo-cancellation', true));
 const talkLimiter = ref(storedToggle('kikiweb-talk-limiter', true));
 const talkAutoVolume = ref(storedToggle('kikiweb-talk-auto-volume', true));
+const talkVoicePresetLabel = computed(() => talkVoicePresetLabels[talkVoicePreset.value]);
+const talkProcessingEnabledCount = computed(
+  () =>
+    [
+      talkCallOptimization.value,
+      talkNoiseReduction.value,
+      talkMicBoost.value,
+      talkEchoCancellation.value,
+      talkLimiter.value,
+      talkAutoVolume.value,
+    ].filter(Boolean).length,
+);
 
 const secretSequence = [
   'home',
@@ -387,6 +414,8 @@ const recordSecretAction = (action: string) => {
         chatMessage.value = '';
         chatState.value = 'idle';
         chatError.value = '';
+        voicePresetOpen.value = false;
+        talkProcessingOpen.value = false;
         talkUnlocked.value = false;
         window.sessionStorage.removeItem('kikiweb-talk-unlocked');
         window.localStorage.removeItem('kikiweb-talk-unlocked');
@@ -1332,9 +1361,20 @@ onBeforeUnmount(() => {
         <input v-model.number="talkPitch" min="0.7" max="1.5" step="0.05" type="range" />
       </label>
 
-      <fieldset v-if="talkUnlocked" class="voice-preset">
-        <legend>ボイスチェンジャー</legend>
-        <div>
+      <section v-if="talkUnlocked" class="setting-dropdown">
+        <button
+          class="setting-dropdown-summary"
+          type="button"
+          :aria-expanded="voicePresetOpen"
+          @click="voicePresetOpen = !voicePresetOpen"
+        >
+          <span>ボイスチェンジャー</span>
+          <small>{{ talkVoicePresetLabel }}</small>
+          <ChevronDown :size="18" aria-hidden="true" />
+        </button>
+        <fieldset v-if="voicePresetOpen" class="voice-preset">
+          <legend>プリセット</legend>
+          <div>
           <button
             type="button"
             :class="{ active: talkVoicePreset === 'normal' }"
@@ -1423,8 +1463,9 @@ onBeforeUnmount(() => {
           >
             ASMR
           </button>
-        </div>
-      </fieldset>
+          </div>
+        </fieldset>
+      </section>
 
       <label v-if="talkUnlocked" class="soundboard-toggle">
         <span>マイクエコー</span>
@@ -1437,9 +1478,20 @@ onBeforeUnmount(() => {
         <input v-model.number="talkEchoAmount" min="0" max="100" step="1" type="range" />
       </label>
 
-      <fieldset v-if="talkUnlocked" class="talk-processing">
-        <legend>Discord向け音声補正</legend>
-        <div class="talk-processing-grid">
+      <section v-if="talkUnlocked" class="setting-dropdown">
+        <button
+          class="setting-dropdown-summary"
+          type="button"
+          :aria-expanded="talkProcessingOpen"
+          @click="talkProcessingOpen = !talkProcessingOpen"
+        >
+          <span>Discord向け音声補正</span>
+          <small>{{ talkProcessingEnabledCount }} / 6 ON</small>
+          <ChevronDown :size="18" aria-hidden="true" />
+        </button>
+        <fieldset v-if="talkProcessingOpen" class="talk-processing">
+          <legend>音声補正</legend>
+          <div class="talk-processing-grid">
           <label class="soundboard-toggle">
             <span>通話品質最適化</span>
             <input v-model="talkCallOptimization" type="checkbox" role="switch" />
@@ -1470,8 +1522,9 @@ onBeforeUnmount(() => {
             <input v-model="talkAutoVolume" type="checkbox" role="switch" />
             <strong>{{ talkAutoVolume ? 'ON' : 'OFF' }}</strong>
           </label>
-        </div>
-      </fieldset>
+          </div>
+        </fieldset>
+      </section>
 
       <div class="audio-meter" aria-live="polite">
         <span>Buffer {{ bufferMs }}ms</span>

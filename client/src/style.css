@@ -961,10 +961,58 @@ h2 {
   text-align: right;
 }
 
-.voice-preset {
+.setting-dropdown {
   margin: 18px 0 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.setting-dropdown-summary {
+  width: 100%;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 18px;
+  gap: 10px;
+  align-items: center;
   border: 0;
+  border-radius: 0;
   padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 700;
+  text-align: left;
+}
+
+.setting-dropdown-summary small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.setting-dropdown-summary svg {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.setting-dropdown-summary[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.setting-dropdown-summary:hover {
+  border-color: transparent;
+  transform: none;
+}
+
+.setting-dropdown-summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.voice-preset {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 12px 0 14px;
 }
 
 .voice-preset legend {
@@ -1000,9 +1048,10 @@ h2 {
 }
 
 .talk-processing {
-  margin: 20px 0 0;
+  margin: 0;
   border: 0;
-  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 0 12px;
 }
 
 .talk-processing legend {
