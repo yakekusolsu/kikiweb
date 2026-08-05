@@ -82,11 +82,11 @@ const talkVoicePresetSettings: Record<
   robot: { highpass: 80, lowpass: 8_000, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
   minions: { highpass: 180, lowpass: 15_000, bodyFrequency: 300, bodyGain: -7, presenceFrequency: 4_200, presenceGain: 6 },
   chorus: { highpass: 45, lowpass: 16_000, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 2 },
-  'natural-low': { highpass: 35, lowpass: 16_000, bodyFrequency: 170, bodyGain: 3, presenceFrequency: 3_000, presenceGain: 1 },
-  bright: { highpass: 70, lowpass: 18_000, bodyFrequency: 260, bodyGain: -1, presenceFrequency: 3_800, presenceGain: 4 },
-  radio: { highpass: 140, lowpass: 5_200, bodyFrequency: 650, bodyGain: 2, presenceFrequency: 2_600, presenceGain: 3 },
-  boy: { highpass: 105, lowpass: 17_000, bodyFrequency: 260, bodyGain: -3, presenceFrequency: 3_500, presenceGain: 3 },
-  asmr: { highpass: 35, lowpass: 13_500, bodyFrequency: 160, bodyGain: 3, presenceFrequency: 5_200, presenceGain: 3 },
+  'natural-low': { highpass: 30, lowpass: 15_000, bodyFrequency: 150, bodyGain: 4, presenceFrequency: 2_800, presenceGain: 1 },
+  bright: { highpass: 75, lowpass: 18_000, bodyFrequency: 280, bodyGain: -2, presenceFrequency: 4_200, presenceGain: 5 },
+  radio: { highpass: 180, lowpass: 4_800, bodyFrequency: 900, bodyGain: 3, presenceFrequency: 2_400, presenceGain: 3 },
+  boy: { highpass: 100, lowpass: 17_000, bodyFrequency: 850, bodyGain: 2, presenceFrequency: 3_600, presenceGain: 4 },
+  asmr: { highpass: 30, lowpass: 16_000, bodyFrequency: 140, bodyGain: 4, presenceFrequency: 6_500, presenceGain: 4 },
 };
 
 const storedToggle = (key: string, fallback: boolean) => {
@@ -228,12 +228,24 @@ function applyTalkDynamics() {
   const boostMultiplier = talkMicBoost.value ? 2 : 1;
   talkBoostNode?.gain.setTargetAtTime(talkGain.value * boostMultiplier, now, 0.02);
 
-  if (talkAutoVolume.value) {
-    setCompressor(talkCompressorNode, { threshold: -24, knee: 12, ratio: 4, attack: 0.006, release: 0.25 });
-  } else if (talkVoicePreset.value === 'radio') {
-    setCompressor(talkCompressorNode, { threshold: -20, knee: 10, ratio: 3, attack: 0.01, release: 0.18 });
+  if (talkVoicePreset.value === 'radio') {
+    setCompressor(talkCompressorNode, {
+      threshold: talkAutoVolume.value ? -24 : -20,
+      knee: 8,
+      ratio: talkAutoVolume.value ? 4 : 3,
+      attack: 0.008,
+      release: 0.16,
+    });
   } else if (talkVoicePreset.value === 'asmr') {
-    setCompressor(talkCompressorNode, { threshold: -26, knee: 12, ratio: 3, attack: 0.008, release: 0.3 });
+    setCompressor(talkCompressorNode, {
+      threshold: talkAutoVolume.value ? -30 : -26,
+      knee: 14,
+      ratio: talkAutoVolume.value ? 3.5 : 2.5,
+      attack: 0.012,
+      release: 0.34,
+    });
+  } else if (talkAutoVolume.value) {
+    setCompressor(talkCompressorNode, { threshold: -24, knee: 12, ratio: 4, attack: 0.006, release: 0.25 });
   } else {
     setCompressor(talkCompressorNode, { threshold: 0, knee: 0, ratio: 1, attack: 0.003, release: 0.1 });
   }
@@ -624,7 +636,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=11');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=12');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,

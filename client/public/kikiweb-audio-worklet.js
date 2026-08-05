@@ -188,7 +188,7 @@ const KIKIWEB_VOICE_PRESET_PITCH = {
   masculine: 0.86,
   minions: 1.36,
   "natural-low": 0.915,
-  boy: 1.09,
+  boy: 1.18,
 };
 
 class KikiWebPcmCapture extends AudioWorkletProcessor {
@@ -205,6 +205,15 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.pitch = Math.max(0.7, Math.min(1.5, Number(options?.processorOptions?.pitch) || 1));
     this.voicePreset = normalizeVoicePreset(options?.processorOptions?.voicePreset);
     this.robotPhase = 0;
+    this.radioPhase = 0;
+    this.noiseState = 0x6d2b79f5;
+    this.noiseLow = 0;
+    this.previousLeft = 0;
+    this.previousRight = 0;
+    this.warmthLeft = 0;
+    this.warmthRight = 0;
+    this.effectLeft = 0;
+    this.effectRight = 0;
     this.chorusPhase = 0;
     this.chorusRingSize = 4_096;
     this.chorusRingMask = this.chorusRingSize - 1;
@@ -285,13 +294,79 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     return current + (next - current) * fraction;
   }
 
-  applyChorus(leftSample, rightSample) {
+  nextNoise() {
+    this.noiseState = (Math.imul(this.noiseState, 1_664_525) + 1_013_904_223) >>> 0;
+    return this.noiseState / 2_147_483_648 - 1;
+  }
+
+  applyPresetCharacter(leftSample, rightSample) {
+    const leftHigh = leftSample - this.previousLeft;
+    const rightHigh = rightSample - this.previousRight;
+    this.previousLeft = leftSample;
+    this.previousRight = rightSample;
+    this.warmthLeft += (leftSample - this.warmthLeft) * 0.04;
+    this.warmthRight += (rightSample - this.warmthRight) * 0.04;
+
+    if (this.voicePreset === "natural-low") {
+      this.effectLeft = Math.tanh((leftSample * 0.86 + this.warmthLeft * 0.22) * 1.2) * 0.9;
+      this.effectRight = Math.tanh((rightSample * 0.86 + this.warmthRight * 0.22) * 1.2) * 0.9;
+      return;
+    }
+
+    if (this.voicePreset === "bright") {
+      this.effectLeft = Math.tanh((leftSample + leftHigh * 0.48) * 1.18) * 0.88;
+      this.effectRight = Math.tanh((rightSample + rightHigh * 0.48) * 1.18) * 0.88;
+      return;
+    }
+
+    if (this.voicePreset === "radio") {
+      const noise = this.nextNoise();
+      this.noiseLow += (noise - this.noiseLow) * 0.08;
+      const hiss = noise - this.noiseLow;
+      const hum = Math.sin(this.radioPhase);
+      this.radioPhase += (Math.PI * 2 * 90) / sampleRate;
+      if (this.radioPhase >= Math.PI * 2) this.radioPhase -= Math.PI * 2;
+      this.effectLeft = Math.tanh(leftSample * 1.7) * 0.8 + hiss * 0.0022 + hum * 0.0008;
+      this.effectRight = Math.tanh(rightSample * 1.7) * 0.8 + hiss * 0.002 + hum * 0.0008;
+      return;
+    }
+
+    if (this.voicePreset === "boy") {
+      this.effectLeft = Math.tanh((leftSample + leftHigh * 0.16) * 1.08) * 0.94;
+      this.effectRight = Math.tanh((rightSample + rightHigh * 0.16) * 1.08) * 0.94;
+      return;
+    }
+
+    if (this.voicePreset === "asmr") {
+      const leftAir = 0.0008 + Math.min(0.0035, Math.abs(leftSample) * 0.018);
+      const rightAir = 0.0008 + Math.min(0.0035, Math.abs(rightSample) * 0.018);
+      this.effectLeft = leftSample * 0.9 + this.warmthLeft * 0.16 + this.nextNoise() * leftAir;
+      this.effectRight = rightSample * 0.9 + this.warmthRight * 0.16 + this.nextNoise() * rightAir;
+      return;
+    }
+
+    this.effectLeft = leftSample;
+    this.effectRight = rightSample;
+  }
+
+  applySpatialEffect(leftSample, rightSample) {
     this.chorusLeftRing[this.chorusWritePosition & this.chorusRingMask] = leftSample;
     this.chorusRightRing[this.chorusWritePosition & this.chorusRingMask] = rightSample;
 
-    if (this.voicePreset !== "chorus") {
+    if (this.voicePreset === "asmr") {
+      const leftNear = this.readChorusRing(this.chorusLeftRing, sampleRate * 0.0035);
+      const rightNear = this.readChorusRing(this.chorusRightRing, sampleRate * 0.0055);
+      this.effectLeft = leftSample * 0.9 + leftNear * 0.13;
+      this.effectRight = rightSample * 0.9 + rightNear * 0.13;
       this.chorusWritePosition += 1;
-      return [leftSample, rightSample];
+      return;
+    }
+
+    if (this.voicePreset !== "chorus") {
+      this.effectLeft = leftSample;
+      this.effectRight = rightSample;
+      this.chorusWritePosition += 1;
+      return;
     }
 
     const baseDelay = sampleRate * 0.021;
@@ -303,7 +378,8 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.chorusPhase += (Math.PI * 2 * 0.72) / sampleRate;
     if (this.chorusPhase >= Math.PI * 2) this.chorusPhase -= Math.PI * 2;
     this.chorusWritePosition += 1;
-    return [leftSample * 0.72 + leftWet * 0.32, rightSample * 0.72 + rightWet * 0.32];
+    this.effectLeft = leftSample * 0.72 + leftWet * 0.32;
+    this.effectRight = rightSample * 0.72 + rightWet * 0.32;
   }
 
   process(inputs, outputs) {
@@ -341,7 +417,10 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
           this.robotPhase += (Math.PI * 2 * 72) / sampleRate;
           if (this.robotPhase >= Math.PI * 2) this.robotPhase -= Math.PI * 2;
         }
-        [leftShifted, rightShifted] = this.applyChorus(leftShifted, rightShifted);
+        this.applyPresetCharacter(leftShifted, rightShifted);
+        this.applySpatialEffect(this.effectLeft, this.effectRight);
+        leftShifted = this.effectLeft;
+        rightShifted = this.effectRight;
         const leftSample = Math.tanh(leftShifted * this.gateGain * this.speechGain);
         const rightSample = Math.tanh(rightShifted * this.gateGain * this.speechGain);
         pcm[index * 2] = leftSample * 32767;
