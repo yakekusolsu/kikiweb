@@ -97,6 +97,7 @@ const publicStreamStatus = (stream) => ({
   activeSpeakers: stream.mixer.activeSpeakerCount(),
   memberCount: stream.memberCount,
   mutedCount: stream.mutedCount,
+  users: stream.users,
   lastAudioAt: Math.max(stream.mixer.getLastAudioAt(), stream.soundboardMixer.getLastAudioAt()),
   lastIngestAt: stream.lastIngestAt,
 });
@@ -129,6 +130,7 @@ const streamFromIngestUrl = (url) => {
       lastIngestAt: 0,
       memberCount: 0,
       mutedCount: 0,
+      users: [],
       mixer: new AudioMixer(STREAM_VOICE),
       soundboardMixer: new AudioMixer(STREAM_SOUNDBOARD),
     };
@@ -155,6 +157,38 @@ const parseCount = (value) => {
   const count = Number(value);
   if (!Number.isSafeInteger(count) || count < 0) return null;
   return Math.min(count, 100_000);
+};
+
+const parseVoiceUsers = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  const users = [];
+  const seenIds = new Set();
+  for (const candidate of value.slice(0, 100)) {
+    const id = String(candidate?.id ?? '');
+    if (!/^\d{1,20}$/.test(id) || seenIds.has(id)) continue;
+    seenIds.add(id);
+    users.push({
+      id,
+      name: safeLabel(candidate?.name, 'Discord user'),
+      bot: candidate?.bot === true,
+      muted: candidate?.muted === true,
+    });
+  }
+  return users;
+};
+
+const parseSourceGains = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return new Map();
+
+  const sourceGains = new Map();
+  for (const [userId, rawGain] of Object.entries(value).slice(0, 100)) {
+    if (!/^\d{1,20}$/.test(userId)) continue;
+    const gain = Number(rawGain);
+    if (!Number.isFinite(gain)) continue;
+    sourceGains.set(`voice-${userId}`, Math.max(0, Math.min(2, gain)));
+  }
+  return sourceGains;
 };
 
 const sendJson = (response, statusCode, body) => {
@@ -214,6 +248,7 @@ wss.on('connection', (ws, _request, url) => {
     stream.ingestClient = ws;
     stream.memberCount = 0;
     stream.mutedCount = 0;
+    stream.users = [];
     ws.on('message', (message, isBinary) => {
       if (!isBinary) {
         try {
@@ -224,6 +259,7 @@ wss.on('connection', (ws, _request, url) => {
           if (memberCount === null || mutedCount === null) return;
           stream.memberCount = memberCount;
           stream.mutedCount = Math.min(mutedCount, memberCount);
+          stream.users = parseVoiceUsers(payload.users);
         } catch {
           // Ignore malformed status messages while keeping the audio stream alive.
         }
@@ -338,6 +374,16 @@ wss.on('connection', (ws, _request, url) => {
 
     stream.mixer.addClient(ws);
     stream.soundboardMixer.addClient(ws);
+    ws.on('message', (message, isBinary) => {
+      if (isBinary) return;
+      try {
+        const payload = JSON.parse(message.toString());
+        if (payload.type !== 'user-volumes') return;
+        stream.mixer.setClientSourceGains(ws, parseSourceGains(payload.volumes));
+      } catch {
+        // Ignore malformed listener controls while keeping audio connected.
+      }
+    });
     ws.send(
       JSON.stringify({
         type: 'hello',

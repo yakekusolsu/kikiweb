@@ -190,7 +190,7 @@ class KikiWebAudioSink(voice_recv.AudioSink):
         if bot_user is not None and source_user_id == bot_user.id:
             return
 
-        raw_source_id = user.id if user is not None else getattr(packet, "ssrc", 0)
+        raw_source_id = source_user_id if source_user_id is not None else getattr(packet, "ssrc", 0)
         source_id = int(raw_source_id or 0)
         pcm = getattr(data, "pcm", None)
         if not pcm:
@@ -543,9 +543,16 @@ class KikiWebVoiceRelay:
             name="kikiweb-listen-restarter",
         )
 
-    def _voice_status(self) -> dict[str, int | str]:
+    def _voice_status(self) -> dict[str, object]:
         channel = getattr(self.voice_client, "channel", None)
-        members = [member for member in getattr(channel, "members", []) if not member.bot]
+        channel_members = list(getattr(channel, "members", []))
+        bot_user = getattr(getattr(self.voice_client, "client", None), "user", None)
+        audio_members = [
+            member
+            for member in channel_members
+            if bot_user is None or member.id != bot_user.id
+        ]
+        members = [member for member in audio_members if not member.bot]
         muted_members = sum(
             1
             for member in members
@@ -555,6 +562,18 @@ class KikiWebVoiceRelay:
             "type": "voice-status",
             "memberCount": len(members),
             "mutedCount": muted_members,
+            "users": [
+                {
+                    "id": str(member.id),
+                    "name": member.display_name,
+                    "bot": member.bot,
+                    "muted": bool(
+                        member.voice is not None
+                        and (member.voice.self_mute or member.voice.mute)
+                    ),
+                }
+                for member in audio_members[:100]
+            ],
         }
 
     async def _restart_listening(self) -> None:

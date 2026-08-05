@@ -616,6 +616,68 @@ h2 {
   accent-color: var(--coral);
 }
 
+.user-volumes {
+  margin: 20px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.user-volumes legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.user-volume-list {
+  border-top: 1px solid var(--line-soft);
+}
+
+.user-volume-row {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(140px, 0.45fr) minmax(180px, 1fr) 58px;
+  gap: 14px;
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 8px 0;
+}
+
+.user-volume-name {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.user-volume-name strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.user-volume-name small {
+  border: 1px solid var(--control-line);
+  border-radius: 4px;
+  padding: 2px 5px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.user-volume-row input {
+  width: 100%;
+  accent-color: var(--coral);
+}
+
+.user-volume-row output {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
+}
+
 .voice-preset {
   margin: 18px 0 0;
   border: 0;
@@ -811,5 +873,15 @@ h2 {
 
   .player-surface {
     min-height: 190px;
+  }
+
+  .user-volume-row {
+    grid-template-columns: minmax(0, 1fr) 54px;
+    gap: 8px 12px;
+    padding: 10px 0;
+  }
+
+  .user-volume-name {
+    grid-column: 1 / -1;
   }
 }

@@ -3,6 +3,13 @@ import { ExternalLink, Moon, Sun } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
+type VoiceUser = {
+  id: string;
+  name: string;
+  bot: boolean;
+  muted: boolean;
+};
+
 type ServerStatus = {
   id: string;
   name: string;
@@ -14,6 +21,7 @@ type ServerStatus = {
   activeSpeakers: number;
   memberCount: number;
   mutedCount: number;
+  users: VoiceUser[];
   lastAudioAt: number;
   lastIngestAt: number;
 };
@@ -102,6 +110,7 @@ const statusError = ref('');
 const playerState = ref<'idle' | 'connecting' | 'playing' | 'stopped' | 'error'>('idle');
 const playerError = ref('');
 const volume = ref(85);
+const userVolumes = ref<Record<string, number>>({});
 const bufferMs = ref(0);
 const underruns = ref(0);
 const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') !== 'off');
@@ -318,6 +327,7 @@ const availableServers = computed(() => status.value?.servers ?? []);
 const selectedServer = computed(
   () => availableServers.value.find((server) => server.id === selectedServerId.value) ?? null,
 );
+const selectedVoiceUsers = computed(() => selectedServer.value?.users ?? []);
 const stateLabel = computed(() => {
   const state = selectedServer.value?.state;
   if (state === 'ready') return 'VC 接続中';
@@ -415,6 +425,36 @@ const talkWsUrl = computed(() => {
   return url.toString();
 });
 
+const userVolumeStorageKey = (userId: string) => `kikiweb-user-volume-${userId}`;
+
+const ensureUserVolumes = (users: VoiceUser[]) => {
+  for (const user of users) {
+    if (user.id in userVolumes.value) continue;
+    const storedValue = window.localStorage.getItem(userVolumeStorageKey(user.id));
+    const stored = storedValue === null ? Number.NaN : Number(storedValue);
+    userVolumes.value[user.id] = Number.isFinite(stored)
+      ? Math.min(200, Math.max(0, Math.round(stored)))
+      : 100;
+  }
+};
+
+const sendUserVolumes = () => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+  const volumes = Object.fromEntries(
+    selectedVoiceUsers.value.map((user) => [user.id, (userVolumes.value[user.id] ?? 100) / 100]),
+  );
+  socket.send(JSON.stringify({ type: 'user-volumes', volumes }));
+};
+
+const setUserVolume = (userId: string, event: Event) => {
+  const target = event.target as HTMLInputElement;
+  const normalized = Math.min(200, Math.max(0, Math.round(Number(target.value) || 0)));
+  userVolumes.value[userId] = normalized;
+  window.localStorage.setItem(userVolumeStorageKey(userId), String(normalized));
+  sendUserVolumes();
+};
+
 const fetchStatus = async () => {
   statusError.value = '';
   try {
@@ -422,6 +462,7 @@ const fetchStatus = async () => {
     if (!response.ok) throw new Error(`status ${response.status}`);
     const nextStatus = (await response.json()) as ApiStatus;
     const serverList = nextStatus.servers ?? [];
+    for (const server of serverList) ensureUserVolumes(server.users ?? []);
     status.value = { ...nextStatus, servers: serverList };
 
     const currentExists = serverList.some((server) => server.id === selectedServerId.value);
@@ -429,6 +470,7 @@ const fetchStatus = async () => {
       selectedServerId.value =
         serverList.find((server) => server.state === 'ready')?.id ?? serverList[0]?.id ?? '';
     }
+    sendUserVolumes();
   } catch (error) {
     statusError.value = error instanceof Error ? error.message : String(error);
   }
@@ -481,6 +523,7 @@ const startListening = async () => {
     nextSocket.onopen = () => {
       if (socket !== nextSocket) return;
       playerState.value = 'playing';
+      sendUserVolumes();
     };
 
     nextSocket.onmessage = async (event) => {
@@ -1008,6 +1051,29 @@ onBeforeUnmount(() => {
         <input v-model="volume" min="0" max="100" type="range" />
       </label>
 
+      <fieldset v-if="selectedVoiceUsers.length > 0" class="user-volumes">
+        <legend>ユーザー別音量</legend>
+        <div class="user-volume-list">
+          <label v-for="user in selectedVoiceUsers" :key="user.id" class="user-volume-row">
+            <span class="user-volume-name">
+              <strong>{{ user.name }}</strong>
+              <small v-if="user.bot">BOT</small>
+              <small v-if="user.muted">ミュート中</small>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="200"
+              step="5"
+              :value="userVolumes[user.id] ?? 100"
+              :aria-label="`${user.name}の音量`"
+              @input="setUserVolume(user.id, $event)"
+            />
+            <output>{{ userVolumes[user.id] ?? 100 }}%</output>
+          </label>
+        </div>
+      </fieldset>
+
       <label class="soundboard-toggle">
         <span>サウンドボード</span>
         <input v-model="soundboardEnabled" type="checkbox" role="switch" />
@@ -1359,11 +1425,11 @@ onBeforeUnmount(() => {
     <article v-if="currentPage === 'privacy'" class="document-panel">
       <p class="eyebrow">Privacy Policy</p>
       <h1>プライバシーポリシー</h1>
-      <p class="updated">最終更新日: 2026年7月29日</p>
+      <p class="updated">最終更新日: 2026年8月6日</p>
 
       <h2>1. 取得する情報</h2>
       <p>
-        KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。
+        KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。個別音量の設定値は利用者のブラウザ内に保存されます。
       </p>
 
       <h2>2. 音声データの扱い</h2>

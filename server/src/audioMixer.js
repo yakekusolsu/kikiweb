@@ -16,6 +16,9 @@ export class AudioMixer {
 
   addClient(client) {
     this.clients.add(client);
+    if (!(client.kikiwebSourceGains instanceof Map)) {
+      client.kikiwebSourceGains = new Map();
+    }
     client.isAlive = true;
     client.on('pong', () => {
       client.isAlive = true;
@@ -27,6 +30,11 @@ export class AudioMixer {
 
   clientCount() {
     return this.clients.size;
+  }
+
+  setClientSourceGains(client, sourceGains) {
+    if (!this.clients.has(client)) return;
+    client.kikiwebSourceGains = new Map(sourceGains);
   }
 
   activeSpeakerCount() {
@@ -81,7 +89,7 @@ export class AudioMixer {
     for (const [userId, buffer] of this.buffers) {
       if (buffer.length < PCM_FRAME_BYTES) continue;
 
-      frames.push(buffer.subarray(0, PCM_FRAME_BYTES));
+      frames.push({ sourceId: userId, pcm: buffer.subarray(0, PCM_FRAME_BYTES) });
       const rest = buffer.subarray(PCM_FRAME_BYTES);
       if (rest.length === 0) {
         this.buffers.delete(userId);
@@ -92,28 +100,36 @@ export class AudioMixer {
 
     if (frames.length === 0) return;
 
-    const mixed = Buffer.allocUnsafe(PCM_FRAME_BYTES);
-    const divisor =
-      this.streamType === 1 ? Math.max(1, frames.length) : Math.max(1, Math.sqrt(frames.length));
-
-    for (let offset = 0; offset < PCM_FRAME_BYTES; offset += 2) {
-      let sample = 0;
-      for (const frame of frames) {
-        sample += frame.readInt16LE(offset);
-      }
-
-      sample = Math.max(-32768, Math.min(32767, Math.round(sample / divisor)));
-      mixed.writeInt16LE(sample, offset);
-    }
-
     this.lastAudioAt = Date.now();
-    const packet = Buffer.allocUnsafe(PCM_FRAME_BYTES + 1);
-    packet[0] = this.streamType;
-    mixed.copy(packet, 1);
     for (const client of this.clients) {
-      if (client.readyState === client.OPEN) {
-        client.send(packet, { binary: true });
+      if (client.readyState !== client.OPEN) continue;
+
+      const audibleFrames = frames
+        .map((frame) => ({
+          ...frame,
+          gain: client.kikiwebSourceGains.get(frame.sourceId) ?? 1,
+        }))
+        .filter((frame) => frame.gain > 0);
+      const divisor =
+        this.streamType === 1
+          ? Math.max(1, audibleFrames.length)
+          : Math.max(1, Math.sqrt(audibleFrames.length));
+      const mixed = Buffer.alloc(PCM_FRAME_BYTES);
+
+      for (let offset = 0; offset < PCM_FRAME_BYTES; offset += 2) {
+        let sample = 0;
+        for (const frame of audibleFrames) {
+          sample += frame.pcm.readInt16LE(offset) * frame.gain;
+        }
+
+        sample = Math.max(-32768, Math.min(32767, Math.round(sample / divisor)));
+        mixed.writeInt16LE(sample, offset);
       }
+
+      const packet = Buffer.allocUnsafe(PCM_FRAME_BYTES + 1);
+      packet[0] = this.streamType;
+      mixed.copy(packet, 1);
+      client.send(packet, { binary: true });
     }
   }
 }
