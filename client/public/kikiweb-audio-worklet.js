@@ -208,6 +208,11 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.radioPhase = 0;
     this.noiseState = 0x6d2b79f5;
     this.noiseLow = 0;
+    this.asmrEnvelope = 0;
+    this.asmrNoiseFastLeft = 0;
+    this.asmrNoiseSlowLeft = 0;
+    this.asmrNoiseFastRight = 0;
+    this.asmrNoiseSlowRight = 0;
     this.previousLeft = 0;
     this.previousRight = 0;
     this.warmthLeft = 0;
@@ -340,10 +345,24 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     }
 
     if (this.voicePreset === "asmr") {
-      const leftAir = 0.0008 + Math.min(0.0035, Math.abs(leftSample) * 0.018);
-      const rightAir = 0.0008 + Math.min(0.0035, Math.abs(rightSample) * 0.018);
-      this.effectLeft = leftSample * 0.9 + this.warmthLeft * 0.16 + this.nextNoise() * leftAir;
-      this.effectRight = rightSample * 0.9 + this.warmthRight * 0.16 + this.nextNoise() * rightAir;
+      const level = Math.max(Math.abs(leftSample), Math.abs(rightSample));
+      const envelopeSpeed = level > this.asmrEnvelope ? 0.18 : 0.0015;
+      this.asmrEnvelope += (level - this.asmrEnvelope) * envelopeSpeed;
+
+      const leftNoise = this.nextNoise();
+      const rightNoise = this.nextNoise();
+      this.asmrNoiseFastLeft += (leftNoise - this.asmrNoiseFastLeft) * 0.55;
+      this.asmrNoiseSlowLeft += (leftNoise - this.asmrNoiseSlowLeft) * 0.08;
+      this.asmrNoiseFastRight += (rightNoise - this.asmrNoiseFastRight) * 0.55;
+      this.asmrNoiseSlowRight += (rightNoise - this.asmrNoiseSlowRight) * 0.08;
+      const leftBreath = this.asmrNoiseFastLeft - this.asmrNoiseSlowLeft;
+      const rightBreath = this.asmrNoiseFastRight - this.asmrNoiseSlowRight;
+      const breathLevel = Math.min(0.035, this.asmrEnvelope * 0.22);
+
+      this.effectLeft =
+        leftSample * 0.55 + this.warmthLeft * 0.16 + leftHigh * 0.34 + leftBreath * breathLevel;
+      this.effectRight =
+        rightSample * 0.55 + this.warmthRight * 0.16 + rightHigh * 0.34 + rightBreath * breathLevel;
       return;
     }
 
@@ -358,8 +377,8 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     if (this.voicePreset === "asmr") {
       const leftNear = this.readChorusRing(this.chorusLeftRing, sampleRate * 0.0035);
       const rightNear = this.readChorusRing(this.chorusRightRing, sampleRate * 0.0055);
-      this.effectLeft = leftSample * 0.9 + leftNear * 0.13;
-      this.effectRight = rightSample * 0.9 + rightNear * 0.13;
+      this.effectLeft = leftSample * 0.78 + leftNear * 0.22;
+      this.effectRight = rightSample * 0.78 + rightNear * 0.22;
       this.chorusWritePosition += 1;
       return;
     }

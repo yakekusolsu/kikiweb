@@ -86,7 +86,7 @@ const talkVoicePresetSettings: Record<
   bright: { highpass: 75, lowpass: 18_000, bodyFrequency: 280, bodyGain: -2, presenceFrequency: 4_200, presenceGain: 5 },
   radio: { highpass: 180, lowpass: 4_800, bodyFrequency: 900, bodyGain: 3, presenceFrequency: 2_400, presenceGain: 3 },
   boy: { highpass: 100, lowpass: 17_000, bodyFrequency: 850, bodyGain: 2, presenceFrequency: 3_600, presenceGain: 4 },
-  asmr: { highpass: 30, lowpass: 16_000, bodyFrequency: 140, bodyGain: 4, presenceFrequency: 6_500, presenceGain: 4 },
+  asmr: { highpass: 30, lowpass: 16_000, bodyFrequency: 140, bodyGain: 4, presenceFrequency: 6_500, presenceGain: 6 },
 };
 
 const storedToggle = (key: string, fallback: boolean) => {
@@ -636,7 +636,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=13');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=14');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,
