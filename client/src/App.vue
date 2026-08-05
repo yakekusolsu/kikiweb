@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ExternalLink, Moon, Sun } from '@lucide/vue';
+import { ChevronDown, ExternalLink, Moon, Sun } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
@@ -111,6 +111,7 @@ const playerState = ref<'idle' | 'connecting' | 'playing' | 'stopped' | 'error'>
 const playerError = ref('');
 const volume = ref(85);
 const userVolumes = ref<Record<string, number>>({});
+const userVolumesOpen = ref(false);
 const bufferMs = ref(0);
 const underruns = ref(0);
 const soundboardEnabled = ref(window.localStorage.getItem('kikiweb-soundboard') !== 'off');
@@ -1052,9 +1053,18 @@ onBeforeUnmount(() => {
         <input v-model="volume" min="0" max="100" type="range" />
       </label>
 
-      <fieldset v-if="selectedServer" class="user-volumes">
-        <legend>ユーザー別音量</legend>
-        <div v-if="selectedVoiceUsers.length > 0" class="user-volume-list">
+      <section v-if="selectedServer" class="user-volumes">
+        <button
+          class="user-volumes-summary"
+          type="button"
+          :aria-expanded="userVolumesOpen"
+          @click="userVolumesOpen = !userVolumesOpen"
+        >
+          <span>ユーザー別音量</span>
+          <small>{{ selectedVoiceUsers.length > 0 ? `${selectedVoiceUsers.length}人` : '未取得' }}</small>
+          <ChevronDown :size="18" aria-hidden="true" />
+        </button>
+        <div v-if="userVolumesOpen && selectedVoiceUsers.length > 0" class="user-volume-list">
           <label v-for="user in selectedVoiceUsers" :key="user.id" class="user-volume-row">
             <span class="user-volume-name">
               <strong>{{ user.name }}</strong>
@@ -1073,14 +1083,14 @@ onBeforeUnmount(() => {
             <output>{{ userVolumes[user.id] ?? 100 }}%</output>
           </label>
         </div>
-        <p v-else class="user-volume-empty">
+        <p v-else-if="userVolumesOpen" class="user-volume-empty">
           {{
             hasVoiceUserMetadata
               ? 'VC参加者情報を待っています。Botを最新版へ更新して再接続してください。'
               : 'Relayを最新版へ更新すると、VC参加者ごとの音量スライダーが表示されます。'
           }}
         </p>
-      </fieldset>
+      </section>
 
       <label class="soundboard-toggle">
         <span>サウンドボード</span>

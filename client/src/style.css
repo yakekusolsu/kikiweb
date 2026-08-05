@@ -618,15 +618,41 @@ h2 {
 
 .user-volumes {
   margin: 20px 0 0;
-  border: 0;
-  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
 }
 
-.user-volumes legend {
-  margin-bottom: 8px;
-  color: var(--muted);
-  font-size: 0.78rem;
+.user-volumes-summary {
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 18px;
+  gap: 10px;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
   font-weight: 700;
+  text-align: left;
+  user-select: none;
+}
+
+.user-volumes-summary small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.user-volumes-summary svg {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.user-volumes-summary[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
 .user-volume-list {
@@ -636,7 +662,6 @@ h2 {
 .user-volume-empty {
   margin: 0;
   border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
   padding: 12px 0;
   color: var(--muted);
   font-size: 0.82rem;
