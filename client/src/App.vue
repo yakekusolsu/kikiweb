@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, ExternalLink, Moon, Sun } from '@lucide/vue';
+import { ChevronDown, ExternalLink, Moon, Send, Sun } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
@@ -124,6 +124,9 @@ const talkUnlocked = ref(
 );
 const talkState = ref<'idle' | 'connecting' | 'talking' | 'stopped' | 'error'>('idle');
 const talkError = ref('');
+const chatMessage = ref('');
+const chatState = ref<'idle' | 'sending' | 'sent' | 'error'>('idle');
+const chatError = ref('');
 const storedTalkGain = Number(window.localStorage.getItem('kikiweb-talk-gain'));
 const talkGain = ref(Number.isFinite(storedTalkGain) ? Math.min(8.5, Math.max(1, storedTalkGain)) : 2.5);
 const storedTalkSensitivity = Number(window.localStorage.getItem('kikiweb-talk-sensitivity'));
@@ -179,6 +182,7 @@ let audioContext: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let soundboardWorkletNode: AudioWorkletNode | null = null;
 let statusTimer: number | undefined;
+let chatStatusTimer: number | undefined;
 let talkSocket: WebSocket | null = null;
 let talkAudioContext: AudioContext | null = null;
 let talkSourceNode: MediaStreamAudioSourceNode | null = null;
@@ -357,6 +361,9 @@ const recordSecretAction = (action: string) => {
       hideSequenceIndex += 1;
       if (hideSequenceIndex === hideSequence.length) {
         stopTalking();
+        chatMessage.value = '';
+        chatState.value = 'idle';
+        chatError.value = '';
         talkUnlocked.value = false;
         window.sessionStorage.removeItem('kikiweb-talk-unlocked');
         window.localStorage.removeItem('kikiweb-talk-unlocked');
@@ -426,6 +433,53 @@ const talkWsUrl = computed(() => {
   }
   return url.toString();
 });
+
+const sendChatMessage = async () => {
+  const content = chatMessage.value.trim();
+  chatError.value = '';
+
+  if (!selectedServerId.value || !selectedServer.value) {
+    chatState.value = 'error';
+    chatError.value = '接続中のDiscordサーバーを選択してください。';
+    return;
+  }
+  if (!talkToken.value) {
+    chatState.value = 'error';
+    chatError.value = 'チャット用トークンが設定されていません。';
+    return;
+  }
+  if (!content) {
+    chatState.value = 'error';
+    chatError.value = 'メッセージを入力してください。';
+    return;
+  }
+
+  chatState.value = 'sending';
+  try {
+    const response = await fetch(`${normalizedApiUrl.value}/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-talk-token': talkToken.value,
+      },
+      body: JSON.stringify({ serverId: selectedServerId.value, content }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(result?.error || `送信に失敗しました (${response.status})。`);
+    }
+
+    chatMessage.value = '';
+    chatState.value = 'sent';
+    if (chatStatusTimer) window.clearTimeout(chatStatusTimer);
+    chatStatusTimer = window.setTimeout(() => {
+      chatState.value = 'idle';
+    }, 2_500);
+  } catch (error) {
+    chatState.value = 'error';
+    chatError.value = error instanceof Error ? error.message : 'Discordへの送信に失敗しました。';
+  }
+};
 
 const userVolumeStorageKey = (userId: string) => `kikiweb-user-volume-${userId}`;
 
@@ -916,6 +970,7 @@ onBeforeUnmount(() => {
   stopListening();
   stopTalking();
   if (statusTimer) window.clearInterval(statusTimer);
+  if (chatStatusTimer) window.clearTimeout(chatStatusTimer);
   window.removeEventListener('hashchange', syncRoute);
   window.removeEventListener('pointerdown', resumeAudio);
   window.removeEventListener('pageshow', resumeAudio);
@@ -1047,6 +1102,39 @@ onBeforeUnmount(() => {
           Botを鯖に入れる！
         </a>
       </div>
+
+      <form v-if="talkUnlocked" class="chat-composer" @submit.prevent="sendChatMessage">
+        <div class="chat-composer-heading">
+          <div>
+            <span>Discord Webhook</span>
+            <strong>KikiWeb on Chat</strong>
+          </div>
+          <small>{{ chatMessage.length }} / 1000</small>
+        </div>
+        <textarea
+          v-model="chatMessage"
+          maxlength="1000"
+          rows="3"
+          placeholder="Discordへ送るメッセージ"
+          aria-label="Discordへ送るメッセージ"
+        />
+        <div class="chat-composer-actions">
+          <p aria-live="polite">
+            <span v-if="chatState === 'sent'">送信しました。</span>
+            <span v-else-if="selectedServer">{{ selectedServer.name }} へ投稿</span>
+            <span v-else>接続中のサーバーを選択してください。</span>
+          </p>
+          <button
+            class="primary"
+            type="submit"
+            :disabled="chatState === 'sending' || !selectedServer || !chatMessage.trim()"
+          >
+            <Send :size="17" aria-hidden="true" />
+            {{ chatState === 'sending' ? '送信中' : '送信' }}
+          </button>
+        </div>
+        <p v-if="chatError" class="chat-error" role="alert">{{ chatError }}</p>
+      </form>
 
       <label class="field">
         <span>音量</span>
@@ -1484,9 +1572,9 @@ onBeforeUnmount(() => {
         KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。個別音量の設定値は利用者のブラウザ内に保存されます。
       </p>
 
-      <h2>2. 音声データの扱い</h2>
+      <h2>2. 音声・チャットデータの扱い</h2>
       <p>
-        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。この実装では音声データをファイルとして保存しません。
+        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で入力したメッセージは、指定されたDiscord Webhookへ送信するために一時的に処理されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
       </p>
 
       <h2>3. 利用目的</h2>
@@ -1501,7 +1589,7 @@ onBeforeUnmount(() => {
 
       <h2>5. ログと環境変数</h2>
       <p>
-        サーバーログには接続状態やエラーが記録される場合があります。Discord Bot トークンや LISTEN_TOKEN などの秘密情報をログや公開リポジトリに含めないよう管理してください。
+        サーバーログには接続状態やエラーが記録される場合があります。Discord Bot トークン、LISTEN_TOKEN、Discord Webhook URL などの秘密情報をログや公開リポジトリに含めないよう管理してください。
       </p>
 
       <h2>6. 情報の共有</h2>

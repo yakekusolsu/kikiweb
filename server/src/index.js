@@ -1,15 +1,24 @@
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
+import {
+  CHAT_MAX_LENGTH,
+  normalizeChatMessage,
+  parseChatWebhookUrls,
+  postDiscordChatMessage,
+  resolveChatWebhookUrl,
+} from './chatWebhook.js';
 import { config } from './config.js';
 
 const STREAM_VOICE = 0;
 const STREAM_SOUNDBOARD = 1;
 const streams = new Map();
+const chatWebhookUrls = parseChatWebhookUrls(config.chatWebhookUrls, config.chatWebhookUrl);
+const chatRateLimits = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
   response.setHeader('Access-Control-Allow-Origin', origin);
-  response.setHeader('Access-Control-Allow-Headers', 'content-type,x-listen-token');
+  response.setHeader('Access-Control-Allow-Headers', 'content-type,x-listen-token,x-talk-token');
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   response.setHeader('Vary', 'Origin');
 
@@ -28,6 +37,63 @@ const server = createServer(async (request, response) => {
 
   if (request.method === 'GET' && url.pathname === '/status') {
     sendJson(response, 200, publicStatus());
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/chat') {
+    if (!config.talkToken) {
+      sendJson(response, 503, { ok: false, error: 'Chat is not configured.' });
+      return;
+    }
+    if (request.headers['x-talk-token'] !== config.talkToken) {
+      sendJson(response, 401, { ok: false, error: 'Unauthorized.' });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = await readJsonBody(request);
+    } catch (error) {
+      const statusCode = error?.code === 'BODY_TOO_LARGE' ? 413 : 400;
+      sendJson(response, statusCode, { ok: false, error: 'Invalid request body.' });
+      return;
+    }
+
+    const serverId = String(payload?.serverId ?? '');
+    const content = normalizeChatMessage(payload?.content);
+    const stream = streams.get(serverId);
+    if (!/^\d{1,20}$/.test(serverId) || !stream?.ingestClient) {
+      sendJson(response, 409, { ok: false, error: 'The selected Discord server is not connected.' });
+      return;
+    }
+    if (!content) {
+      sendJson(response, 400, {
+        ok: false,
+        error: `Message must be between 1 and ${CHAT_MAX_LENGTH} characters.`,
+      });
+      return;
+    }
+
+    const webhookUrl = resolveChatWebhookUrl(chatWebhookUrls, serverId);
+    if (!webhookUrl) {
+      sendJson(response, 503, { ok: false, error: 'No Discord webhook is configured for this server.' });
+      return;
+    }
+    const rateLimitKey = `${clientAddress(request)}:${serverId}`;
+    const retryAfterSeconds = chatRetryAfter(rateLimitKey);
+    if (retryAfterSeconds > 0) {
+      response.setHeader('Retry-After', String(retryAfterSeconds));
+      sendJson(response, 429, { ok: false, error: 'Please wait before sending another message.' });
+      return;
+    }
+
+    try {
+      await postDiscordChatMessage(webhookUrl, content);
+      sendJson(response, 200, { ok: true });
+    } catch (error) {
+      console.error('KikiWeb chat webhook failed:', error instanceof Error ? error.message : error);
+      sendJson(response, 502, { ok: false, error: 'Discord webhook delivery failed.' });
+    }
     return;
   }
 
@@ -189,6 +255,57 @@ const parseSourceGains = (value) => {
     sourceGains.set(`voice-${userId}`, Math.max(0, Math.min(2, gain)));
   }
   return sourceGains;
+};
+
+const readJsonBody = (request, limit = 16_384) =>
+  new Promise((resolve, reject) => {
+    let settled = false;
+    let size = 0;
+    const chunks = [];
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    request.on('data', (chunk) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > limit) {
+        const error = new Error('Request body is too large.');
+        error.code = 'BODY_TOO_LARGE';
+        fail(error);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (settled) return;
+      settled = true;
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on('error', fail);
+  });
+
+const clientAddress = (request) => {
+  const forwarded = String(request.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return forwarded || request.socket.remoteAddress || 'unknown';
+};
+
+const chatRetryAfter = (key) => {
+  const now = Date.now();
+  const windowMs = 10_000;
+  const timestamps = (chatRateLimits.get(key) ?? []).filter((timestamp) => now - timestamp < windowMs);
+  if (timestamps.length >= 5) {
+    chatRateLimits.set(key, timestamps);
+    return Math.max(1, Math.ceil((windowMs - (now - timestamps[0])) / 1_000));
+  }
+  timestamps.push(now);
+  chatRateLimits.set(key, timestamps);
+  return 0;
 };
 
 const sendJson = (response, statusCode, body) => {
