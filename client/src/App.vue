@@ -1268,7 +1268,7 @@ onBeforeUnmount(() => {
     <article v-if="currentPage === 'guide'" class="document-panel guide-panel">
       <p class="eyebrow">Getting Started</p>
       <h1>Bot導入・使い方</h1>
-      <p class="updated">KikiWeb Botをサーバーに追加して、VCの音声を聞くまでの手順です。</p>
+      <p class="updated">KikiWeb Botの導入、VC中継、自動参加、サイトでの再生手順です。</p>
 
       <h2>1. Botをサーバーに追加</h2>
       <p>下のボタンからDiscordを開き、追加先のサーバーを選択して認証します。</p>
@@ -1284,8 +1284,12 @@ onBeforeUnmount(() => {
       <ol class="guide-steps">
         <li>
           <strong>VC権限を確認</strong>
-          <span>Botにボイスチャンネルの「接続」「発言」「ステータスを設定」権限を付けます。</span>
+          <span>Botに「チャンネルを見る」「接続」「発言」「ボイスチャンネルステータスを設定」権限を付けます。</span>
         </li>
+      </ol>
+
+      <h2>2. VCの中継を開始</h2>
+      <ol class="guide-steps">
         <li>
           <strong>VCへ参加</strong>
           <span>KikiWebで聞きたいボイスチャンネルへ、自分が先に参加します。</span>
@@ -1296,7 +1300,23 @@ onBeforeUnmount(() => {
         </li>
       </ol>
 
-      <h2>2. サイトで音声を聞く</h2>
+      <h2>3. 自動参加を設定</h2>
+      <ol class="guide-steps">
+        <li>
+          <strong>自動参加を有効化</strong>
+          <span><code>/kikiweb_auto enabled:true channel:&lt;VC&gt;</code>を実行し、Discordの候補から対象VCを選びます。</span>
+        </li>
+        <li>
+          <strong>サーバーごとに保存</strong>
+          <span>設定したサーバーとVCの組み合わせが保存され、Bot起動時や切断後に自動で再接続します。</span>
+        </li>
+        <li>
+          <strong>対象VCを変更</strong>
+          <span>別のVCを指定して同じコマンドを再実行すると、そのサーバーの自動参加先を変更できます。</span>
+        </li>
+      </ol>
+
+      <h2>4. サイトで音声を聞く</h2>
       <ol class="guide-steps">
         <li>
           <strong>サーバーを選択</strong>
@@ -1307,16 +1327,20 @@ onBeforeUnmount(() => {
           <span>「聞く」を押します。ブラウザから音声再生を求められた場合は許可してください。</span>
         </li>
         <li>
-          <strong>中継を終了</strong>
-          <span>Discordで <code>/kikiweb_leave</code> を実行すると、BotがVCから退出します。</span>
+          <strong>音量を調節</strong>
+          <span>全体音量を調節できます。「ユーザー別音量」を開くと、VC参加者ごとに0〜200%で変更できます。</span>
         </li>
-        <li>
-          <strong>自動参加を設定</strong>
-          <span><code>/kikiweb_auto enabled:true channel:&lt;VC&gt;</code>で、Bot起動時や切断後にも指定VCへ自動参加します。</span>
-        </li>
+      </ol>
+
+      <h2>5. 中継・自動参加を終了</h2>
+      <ol class="guide-steps">
         <li>
           <strong>自動参加を解除</strong>
-          <span><code>/kikiweb_auto enabled:false</code>で解除します。現在の接続は<code>/kikiweb_leave</code>で終了します。</span>
+          <span><code>/kikiweb_auto enabled:false</code>を実行すると、実行したサーバーだけ自動参加が無効になります。</span>
+        </li>
+        <li>
+          <strong>現在の中継を終了</strong>
+          <span><code>/kikiweb_leave</code>を実行するとBotがVCから退出します。自動参加中は先に無効化してください。</span>
         </li>
       </ol>
 
@@ -1324,7 +1348,9 @@ onBeforeUnmount(() => {
       <ul class="guide-checks">
         <li>Botがオンラインで、対象VCに接続しているか確認します。</li>
         <li>Botの「チャンネルを見る」「接続」「発言」「ステータスを設定」権限を確認します。</li>
+        <li>スラッシュコマンドが出ない場合は、Botを再起動してコマンドツリーの同期を待ちます。</li>
         <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
+        <li>ユーザー別音量が未取得の場合は、RelayとBotを最新版へ更新してBotをVCへ再接続します。</li>
         <li>音が出ない場合はブラウザのタブと端末の音量・ミュートを確認します。</li>
       </ul>
     </article>
