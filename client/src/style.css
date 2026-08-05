@@ -633,6 +633,16 @@ h2 {
   border-top: 1px solid var(--line-soft);
 }
 
+.user-volume-empty {
+  margin: 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
 .user-volume-row {
   min-height: 54px;
   display: grid;

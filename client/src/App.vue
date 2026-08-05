@@ -21,7 +21,7 @@ type ServerStatus = {
   activeSpeakers: number;
   memberCount: number;
   mutedCount: number;
-  users: VoiceUser[];
+  users?: VoiceUser[];
   lastAudioAt: number;
   lastIngestAt: number;
 };
@@ -328,6 +328,7 @@ const selectedServer = computed(
   () => availableServers.value.find((server) => server.id === selectedServerId.value) ?? null,
 );
 const selectedVoiceUsers = computed(() => selectedServer.value?.users ?? []);
+const hasVoiceUserMetadata = computed(() => Array.isArray(selectedServer.value?.users));
 const stateLabel = computed(() => {
   const state = selectedServer.value?.state;
   if (state === 'ready') return 'VC 接続中';
@@ -1051,9 +1052,9 @@ onBeforeUnmount(() => {
         <input v-model="volume" min="0" max="100" type="range" />
       </label>
 
-      <fieldset v-if="selectedVoiceUsers.length > 0" class="user-volumes">
+      <fieldset v-if="selectedServer" class="user-volumes">
         <legend>ユーザー別音量</legend>
-        <div class="user-volume-list">
+        <div v-if="selectedVoiceUsers.length > 0" class="user-volume-list">
           <label v-for="user in selectedVoiceUsers" :key="user.id" class="user-volume-row">
             <span class="user-volume-name">
               <strong>{{ user.name }}</strong>
@@ -1072,6 +1073,13 @@ onBeforeUnmount(() => {
             <output>{{ userVolumes[user.id] ?? 100 }}%</output>
           </label>
         </div>
+        <p v-else class="user-volume-empty">
+          {{
+            hasVoiceUserMetadata
+              ? 'VC参加者情報を待っています。Botを最新版へ更新して再接続してください。'
+              : 'Relayを最新版へ更新すると、VC参加者ごとの音量スライダーが表示されます。'
+          }}
+        </p>
       </fieldset>
 
       <label class="soundboard-toggle">
