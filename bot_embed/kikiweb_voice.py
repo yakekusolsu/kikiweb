@@ -276,22 +276,44 @@ class KikiWebVoiceRelay:
                 name=f"kikiweb-audio-sender-{channel.guild.id}",
             )
 
-        if channel.guild.voice_client:
-            voice_client = channel.guild.voice_client
+        voice_client = channel.guild.voice_client
+        if voice_client and (
+            not isinstance(voice_client, KikiWebVoiceRecvClient)
+            or not voice_client.is_connected()
+        ):
+            await voice_client.disconnect(force=True)
+            await asyncio.sleep(0.25)
+            voice_client = None
+
+        if voice_client:
             previous_channel = getattr(voice_client, "channel", None)
             if previous_channel and getattr(previous_channel, "id", None) != channel.id:
                 await self._set_voice_status(previous_channel, None)
-            if not isinstance(voice_client, KikiWebVoiceRecvClient):
-                await voice_client.disconnect(force=True)
-                voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
-            elif getattr(voice_client.channel, "id", None) != channel.id:
+            if getattr(voice_client.channel, "id", None) != channel.id:
                 await voice_client.move_to(channel)
         else:
             voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
 
+        for _ in range(20):
+            if voice_client.is_connected():
+                break
+            await asyncio.sleep(0.1)
+
+        if not voice_client.is_connected():
+            await voice_client.disconnect(force=True)
+            await asyncio.sleep(0.25)
+            voice_client = await channel.connect(
+                cls=KikiWebVoiceRecvClient,
+                self_deaf=False,
+                self_mute=False,
+            )
+
+        if not voice_client.is_connected():
+            raise RuntimeError("KikiWeb could not establish the Discord voice connection.")
+
         self.voice_client = voice_client
-        await self._set_voice_status(channel, self.config.voice_status)
         await self._start_listening()
+        await self._set_voice_status(channel, self.config.voice_status)
         if not self.listen_watchdog_task or self.listen_watchdog_task.done():
             self.listen_watchdog_task = asyncio.create_task(
                 self._listen_watchdog(),
@@ -500,6 +522,8 @@ class KikiWebVoiceRelay:
         async with self.listen_restart_lock:
             if not self.voice_client or self.closed.is_set():
                 return
+            if not self.voice_client.is_connected():
+                raise RuntimeError("KikiWeb voice client disconnected before listening could start.")
 
             if self.voice_client.is_listening():
                 self.ignore_next_after = True
