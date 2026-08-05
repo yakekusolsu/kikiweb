@@ -81,7 +81,7 @@ const talkVoicePresetSettings: Record<
   masculine: { highpass: 45, lowpass: 15_000, bodyFrequency: 180, bodyGain: 5, presenceFrequency: 2_800, presenceGain: -2 },
   robot: { highpass: 80, lowpass: 8_000, bodyFrequency: 300, bodyGain: -2, presenceFrequency: 3_600, presenceGain: 5 },
   minions: { highpass: 180, lowpass: 15_000, bodyFrequency: 300, bodyGain: -7, presenceFrequency: 4_200, presenceGain: 6 },
-  chorus: { highpass: 45, lowpass: 16_000, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 2 },
+  chorus: { highpass: 55, lowpass: 15_000, bodyFrequency: 220, bodyGain: 1, presenceFrequency: 3_200, presenceGain: 3 },
   'natural-low': { highpass: 30, lowpass: 15_000, bodyFrequency: 150, bodyGain: 4, presenceFrequency: 2_800, presenceGain: 1 },
   bright: { highpass: 75, lowpass: 18_000, bodyFrequency: 280, bodyGain: -2, presenceFrequency: 4_200, presenceGain: 5 },
   radio: { highpass: 180, lowpass: 4_800, bodyFrequency: 900, bodyGain: 3, presenceFrequency: 2_400, presenceGain: 3 },
@@ -636,7 +636,7 @@ const startTalking = async () => {
     if (talkAudioContext.sampleRate !== 48_000) {
       throw new Error('この端末のマイクは 48kHz 送話に対応していません。');
     }
-    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=12');
+    await talkAudioContext.audioWorklet.addModule('/kikiweb-audio-worklet.js?v=13');
     talkSourceNode = talkAudioContext.createMediaStreamSource(talkMicStream);
     talkCaptureNode = new AudioWorkletNode(talkAudioContext, 'kikiweb-pcm-capture', {
       numberOfInputs: 1,

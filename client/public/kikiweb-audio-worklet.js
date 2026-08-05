@@ -215,6 +215,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     this.effectLeft = 0;
     this.effectRight = 0;
     this.chorusPhase = 0;
+    this.chorusPhaseSecondary = Math.PI / 2;
     this.chorusRingSize = 4_096;
     this.chorusRingMask = this.chorusRingSize - 1;
     this.chorusLeftRing = new Float32Array(this.chorusRingSize);
@@ -262,17 +263,17 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
     return current + (next - current) * fraction;
   }
 
-  grainSample(buffer, outputPosition, grainStart) {
+  grainSample(buffer, outputPosition, grainStart, pitchScale = 1) {
     const grainOffset = outputPosition - grainStart;
     if (grainOffset < 0 || grainOffset >= this.grainSize) return 0;
     const window = Math.sin((Math.PI * grainOffset) / this.grainSize) ** 2;
     const presetPitch = KIKIWEB_VOICE_PRESET_PITCH[this.voicePreset] ?? 1;
-    const effectivePitch = Math.min(1.75, Math.max(0.6, this.pitch * presetPitch));
+    const effectivePitch = Math.min(1.75, Math.max(0.6, this.pitch * presetPitch * pitchScale));
     const sourcePosition = grainStart - this.latencyFrames + grainOffset * effectivePitch;
     return this.readRing(buffer, sourcePosition) * window;
   }
 
-  pitchShiftedSample(buffer) {
+  pitchShiftedSample(buffer, pitchScale = 1) {
     const grainStart = Math.floor(this.outputPosition / this.grainHop) * this.grainHop;
     let mixedSample = 0;
     for (let index = 0; index < this.grainOverlapCount; index += 1) {
@@ -280,6 +281,7 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
         buffer,
         this.outputPosition,
         grainStart - this.grainHop * index,
+        pitchScale,
       );
     }
     return mixedSample / (this.grainOverlapCount / 2);
@@ -369,17 +371,25 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       return;
     }
 
-    const baseDelay = sampleRate * 0.021;
-    const depth = sampleRate * 0.006;
-    const leftDelay = baseDelay + Math.sin(this.chorusPhase) * depth;
-    const rightDelay = baseDelay + Math.sin(this.chorusPhase + Math.PI) * depth;
-    const leftWet = this.readChorusRing(this.chorusLeftRing, leftDelay);
-    const rightWet = this.readChorusRing(this.chorusRightRing, rightDelay);
-    this.chorusPhase += (Math.PI * 2 * 0.72) / sampleRate;
+    const firstBaseDelay = sampleRate * 0.014;
+    const firstDepth = sampleRate * 0.005;
+    const secondBaseDelay = sampleRate * 0.032;
+    const secondDepth = sampleRate * 0.008;
+    const leftFirstDelay = firstBaseDelay + Math.sin(this.chorusPhase) * firstDepth;
+    const rightFirstDelay = firstBaseDelay + Math.sin(this.chorusPhase + Math.PI) * firstDepth;
+    const leftSecondDelay = secondBaseDelay + Math.sin(this.chorusPhaseSecondary) * secondDepth;
+    const rightSecondDelay = secondBaseDelay + Math.sin(this.chorusPhaseSecondary + Math.PI) * secondDepth;
+    const leftFirstWet = this.readChorusRing(this.chorusLeftRing, leftFirstDelay);
+    const rightFirstWet = this.readChorusRing(this.chorusRightRing, rightFirstDelay);
+    const leftSecondWet = this.readChorusRing(this.chorusLeftRing, leftSecondDelay);
+    const rightSecondWet = this.readChorusRing(this.chorusRightRing, rightSecondDelay);
+    this.chorusPhase += (Math.PI * 2 * 0.83) / sampleRate;
+    this.chorusPhaseSecondary += (Math.PI * 2 * 1.21) / sampleRate;
     if (this.chorusPhase >= Math.PI * 2) this.chorusPhase -= Math.PI * 2;
+    if (this.chorusPhaseSecondary >= Math.PI * 2) this.chorusPhaseSecondary -= Math.PI * 2;
     this.chorusWritePosition += 1;
-    this.effectLeft = leftSample * 0.72 + leftWet * 0.32;
-    this.effectRight = rightSample * 0.72 + rightWet * 0.32;
+    this.effectLeft = leftSample * 0.48 + leftFirstWet * 0.3 + leftSecondWet * 0.24;
+    this.effectRight = rightSample * 0.48 + rightFirstWet * 0.3 + rightSecondWet * 0.24;
   }
 
   process(inputs, outputs) {
@@ -410,6 +420,14 @@ class KikiWebPcmCapture extends AudioWorkletProcessor {
       for (let index = 0; index < left.length; index += 1) {
         let leftShifted = this.pitchShiftedSample(this.leftRing);
         let rightShifted = this.pitchShiftedSample(this.rightRing);
+        if (this.voicePreset === "chorus") {
+          const leftLower = this.pitchShiftedSample(this.leftRing, 0.975);
+          const leftUpper = this.pitchShiftedSample(this.leftRing, 1.025);
+          const rightLower = this.pitchShiftedSample(this.rightRing, 0.975);
+          const rightUpper = this.pitchShiftedSample(this.rightRing, 1.025);
+          leftShifted = leftShifted * 0.5 + leftLower * 0.3 + leftUpper * 0.2;
+          rightShifted = rightShifted * 0.5 + rightLower * 0.2 + rightUpper * 0.3;
+        }
         if (this.voicePreset === "robot") {
           const carrier = Math.sin(this.robotPhase);
           leftShifted = Math.round((leftShifted * 0.68 + leftShifted * carrier * 0.32) * 128) / 128;
