@@ -471,7 +471,8 @@ class KikiWebVoiceRelay:
             return
 
         try:
-            async for message in history(limit=25, oldest_first=True):
+            recent_messages = [message async for message in history(limit=25)]
+            for message in reversed(recent_messages):
                 self.enqueue_chat_message(message)
         except discord.Forbidden:
             LOGGER.warning(

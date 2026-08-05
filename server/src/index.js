@@ -95,7 +95,6 @@ const server = createServer(async (request, response) => {
         sendJson(response, 409, { ok: false, error: 'The Discord webhook belongs to a different server.' });
         return;
       }
-      setStreamChatChannel(stream, metadata.channelId);
     } catch (error) {
       console.error('KikiWeb could not validate the Discord webhook:', error instanceof Error ? error.message : error);
       sendJson(response, 502, { ok: false, error: 'The Discord webhook could not be validated.' });
@@ -105,9 +104,6 @@ const server = createServer(async (request, response) => {
     try {
       const delivered = await postDiscordChatMessage(webhookUrl, content);
       const deliveredChannelId = String(delivered?.channel_id ?? '');
-      if (/^\d{1,20}$/.test(deliveredChannelId)) {
-        setStreamChatChannel(stream, deliveredChannelId);
-      }
       const chatMessage = normalizeDiscordChatMessage(
         {
           type: 'chat-message',
@@ -306,22 +302,7 @@ const getChatWebhookMetadata = async (webhookUrl) => {
 };
 
 const configureStreamChatChannel = async (stream) => {
-  const webhookUrl = resolveChatWebhookUrl(chatWebhookUrls, stream.id);
-  if (!webhookUrl) {
-    setStreamChatChannel(stream, stream.channelId, stream.channelName);
-    return;
-  }
-
-  try {
-    const metadata = await getChatWebhookMetadata(webhookUrl);
-    if (metadata.guildId !== stream.id) {
-      throw new Error('The configured webhook belongs to a different Discord server.');
-    }
-    setStreamChatChannel(stream, metadata.channelId);
-  } catch (error) {
-    console.error('KikiWeb could not resolve the Discord chat channel:', error instanceof Error ? error.message : error);
-    setStreamChatChannel(stream, stream.channelId, stream.channelName);
-  }
+  setStreamChatChannel(stream, stream.channelId, stream.channelName);
 };
 
 const parseCount = (value) => {

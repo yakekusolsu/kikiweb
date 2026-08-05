@@ -133,10 +133,11 @@ DISCORD_CHAT_WEBHOOK_URLS={"1209781281165152277":"https://discord.com/api/webhoo
 ```
 
 サーバー別の設定が見つからない場合のみ`DISCORD_CHAT_WEBHOOK_URL`を共通の投稿先として使います。
-RelayはWebhookの投稿先チャンネルを自動取得し、Botから同じチャンネルの直近25件と新着メッセージを受信します。
-Webには直近50件をメモリ上で表示し、サーバーのファイルやデータベースには保存しません。
+Botは接続中VCのチャットから最新25件と新着メッセージを受信します。Webには直近50件をメモリ上で表示し、
+サーバーのファイルやデータベースには保存しません。Webhook URLはWebからDiscordへの投稿だけに使用し、
+チャットの読み取り先には影響しません。
 
-Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。BotにはWebhook投稿先の
+Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。Botには接続先VCの
 「チャンネルを見る」と「メッセージ履歴を読む」権限も必要です。既存Botへ組み込む場合は、Bot生成時の
 `discord.Intents`でも`message_content = True`を設定して再起動します。
 
