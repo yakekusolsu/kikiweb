@@ -543,7 +543,14 @@ const chatTime = (timestamp: string) => {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime())
     ? ''
-    : new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(date);
+    : new Intl.DateTimeFormat('ja-JP', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(date);
 };
 
 const chatInitial = (name: string) => Array.from(name.trim())[0]?.toUpperCase() || '?';
