@@ -57,6 +57,11 @@ type ChatItem = {
   timestamp: string;
 };
 
+type ChatContentPart = {
+  kind: 'text' | 'link' | 'image';
+  value: string;
+};
+
 type TalkVoicePreset =
   | 'normal'
   | 'feminine'
@@ -554,6 +559,25 @@ const chatTime = (timestamp: string) => {
 };
 
 const chatInitial = (name: string) => Array.from(name.trim())[0]?.toUpperCase() || '?';
+
+const chatContentParts = (content: string): ChatContentPart[] =>
+  content.split('\n').map((line) => {
+    const value = line.trim();
+    try {
+      const url = new URL(value);
+      const discordAttachment =
+        url.protocol === 'https:' &&
+        (url.hostname === 'cdn.discordapp.com' || url.hostname === 'media.discordapp.net') &&
+        url.pathname.startsWith('/attachments/');
+      if (discordAttachment) {
+        const image = /\.(?:avif|gif|jpe?g|png|webp)$/i.test(url.pathname);
+        return { kind: image ? 'image' : 'link', value };
+      }
+    } catch {
+      // Regular chat text is rendered without URL handling.
+    }
+    return { kind: 'text', value: line };
+  });
 
 const sendChatMessage = async () => {
   const content = chatMessage.value.trim();
@@ -1485,7 +1509,36 @@ onBeforeUnmount(() => {
               <small v-else-if="message.bot">BOT</small>
               <time :datetime="message.timestamp">{{ chatTime(message.timestamp) }}</time>
             </div>
-            <p>{{ message.content }}</p>
+            <div class="chat-message-content">
+              <template v-for="(part, index) in chatContentParts(message.content)" :key="`${message.id}-${index}`">
+                <a
+                  v-if="part.kind === 'image'"
+                  class="chat-attachment-link"
+                  :href="part.value"
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Discord添付画像を開く"
+                >
+                  <img
+                    class="chat-attachment-image"
+                    :src="part.value"
+                    alt="Discord添付画像"
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                  />
+                </a>
+                <a
+                  v-else-if="part.kind === 'link'"
+                  class="chat-attachment-file"
+                  :href="part.value"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  添付ファイルを開く
+                </a>
+                <p v-else class="chat-message-text">{{ part.value }}</p>
+              </template>
+            </div>
           </div>
         </article>
       </div>
