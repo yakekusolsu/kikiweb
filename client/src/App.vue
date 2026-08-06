@@ -609,6 +609,8 @@ const chatContentParts = (content: string): ChatContentPart[] =>
   });
 
 const sendChatMessage = async () => {
+  if (chatState.value === 'sending') return;
+
   const content = chatMessage.value.trim();
   chatError.value = '';
 
@@ -653,6 +655,19 @@ const sendChatMessage = async () => {
     chatState.value = 'error';
     chatError.value = error instanceof Error ? error.message : 'Discordへの送信に失敗しました。';
   }
+};
+
+const sendChatMessageWithShortcut = (event: KeyboardEvent) => {
+  if (
+    event.key !== 'Enter' ||
+    (!event.metaKey && !event.ctrlKey) ||
+    event.isComposing
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  void sendChatMessage();
 };
 
 const userVolumeStorageKey = (userId: string) => `kikiweb-user-volume-${userId}`;
@@ -1610,6 +1625,7 @@ onBeforeUnmount(() => {
           rows="3"
           placeholder="Discordへ送るメッセージ"
           aria-label="Discordへ送るメッセージ"
+          @keydown="sendChatMessageWithShortcut"
         />
         <div class="chat-composer-actions">
           <p aria-live="polite">
