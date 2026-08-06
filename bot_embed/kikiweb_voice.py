@@ -19,7 +19,6 @@ import davey
 import discord
 from discord.ext import voice_recv
 from discord.ext.voice_recv.reader import AudioReader
-from discord.http import Route
 
 try:
     import imageio_ffmpeg
@@ -271,23 +270,6 @@ class KikiWebVoiceRelay:
         self.browser_audio_active = False
         self.chat_tts_playing = False
 
-    async def _set_voice_status(
-        self,
-        channel: discord.VoiceChannel | discord.StageChannel,
-        status: Optional[str],
-    ) -> None:
-        try:
-            await channel._state.http.request(
-                Route("PUT", "/channels/{channel_id}/voice-status", channel_id=channel.id),
-                json={"status": status or None},
-            )
-        except discord.Forbidden:
-            LOGGER.warning(
-                "KikiWeb could not set the VC status. Give the Bot the Set Voice Channel Status permission."
-            )
-        except discord.HTTPException as error:
-            LOGGER.warning("KikiWeb could not update the VC status: %s", error)
-
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
@@ -322,9 +304,6 @@ class KikiWebVoiceRelay:
             voice_client = None
 
         if voice_client:
-            previous_channel = getattr(voice_client, "channel", None)
-            if previous_channel and getattr(previous_channel, "id", None) != channel.id:
-                await self._set_voice_status(previous_channel, None)
             if getattr(voice_client.channel, "id", None) != channel.id:
                 await voice_client.move_to(channel)
         else:
@@ -349,7 +328,6 @@ class KikiWebVoiceRelay:
 
         self.voice_client = voice_client
         await self._start_listening()
-        await self._set_voice_status(channel, self.config.voice_status)
         if not self.listen_watchdog_task or self.listen_watchdog_task.done():
             self.listen_watchdog_task = asyncio.create_task(
                 self._listen_watchdog(),
@@ -363,9 +341,6 @@ class KikiWebVoiceRelay:
             self.voice_client.stop_listening()
 
         if self.voice_client and self.voice_client.is_connected():
-            channel = getattr(self.voice_client, "channel", None)
-            if channel is not None:
-                await self._set_voice_status(channel, None)
             await self.voice_client.disconnect(force=True)
 
         if self.sender_task:

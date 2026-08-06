@@ -15,7 +15,10 @@ install_kikiweb_commands(
     bot,
     relay_url=os.environ["KIKIWEB_RELAY_URL"],
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
-    voice_status=os.environ.get("KIKIWEB_VOICE_STATUS", "試聴完全自由！"),
+    voice_status=os.environ.get(
+        "KIKIWEB_SITE_STATUS",
+        os.environ.get("KIKIWEB_VOICE_STATUS", "試聴完全自由！"),
+    ),
     chat_tts_enabled=os.environ.get("KIKIWEB_CHAT_TTS", "true").lower() not in {"0", "false", "no", "off"},
     chat_tts_voice=os.environ.get("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural"),
     use_slash_commands=True,
