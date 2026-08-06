@@ -31,4 +31,8 @@ export const config = {
   listenToken: process.env.LISTEN_TOKEN ?? '',
   ingestToken: process.env.INGEST_TOKEN ?? '',
   talkToken: process.env.TALK_TOKEN ?? '',
+  discordOAuthClientId: process.env.DISCORD_OAUTH_CLIENT_ID ?? '',
+  discordOAuthClientSecret: process.env.DISCORD_OAUTH_CLIENT_SECRET ?? '',
+  discordOAuthRedirectUri: process.env.DISCORD_OAUTH_REDIRECT_URI ?? '',
+  authTokenSecret: process.env.AUTH_TOKEN_SECRET ?? '',
 };

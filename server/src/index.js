@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
 import { appendChatMessage, normalizeDiscordChatMessage } from './chatMessages.js';
@@ -9,6 +9,11 @@ import {
   createChatPostCommand,
   normalizeChatMessage,
 } from './chatPost.js';
+import {
+  createDiscordSessionToken,
+  normalizeDiscordUser,
+  verifyDiscordSessionToken,
+} from './discordAuth.js';
 import { config } from './config.js';
 
 const STREAM_VOICE = 0;
@@ -19,7 +24,7 @@ const pendingChatPosts = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
   response.setHeader('Access-Control-Allow-Origin', origin);
-  response.setHeader('Access-Control-Allow-Headers', 'content-type,x-listen-token,x-talk-token');
+  response.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-listen-token,x-talk-token');
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   response.setHeader('Vary', 'Origin');
 
@@ -41,12 +46,76 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/auth/discord') {
+    if (!discordOAuthConfigured()) {
+      sendJson(response, 503, { ok: false, error: 'Discord login is not configured.' });
+      return;
+    }
+    const state = randomBytes(24).toString('base64url');
+    const authorizationUrl = new URL('https://discord.com/oauth2/authorize');
+    authorizationUrl.searchParams.set('client_id', config.discordOAuthClientId);
+    authorizationUrl.searchParams.set('response_type', 'code');
+    authorizationUrl.searchParams.set('redirect_uri', config.discordOAuthRedirectUri);
+    authorizationUrl.searchParams.set('scope', 'identify');
+    authorizationUrl.searchParams.set('state', state);
+    redirect(response, authorizationUrl, {
+      'set-cookie': oauthStateCookie(state),
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/auth/discord/callback') {
+    const state = String(url.searchParams.get('state') ?? '');
+    const expectedState = readCookie(request.headers.cookie, 'kikiweb_oauth_state');
+    const clearStateCookie = oauthStateCookie('', 0);
+    if (!discordOAuthConfigured() || !state || !expectedState || state !== expectedState) {
+      redirect(response, clientAuthRedirect('', 'Discordログインを確認できませんでした。'), {
+        'set-cookie': clearStateCookie,
+      });
+      return;
+    }
+
+    const code = String(url.searchParams.get('code') ?? '');
+    if (!code) {
+      redirect(response, clientAuthRedirect('', 'Discordログインがキャンセルされました。'), {
+        'set-cookie': clearStateCookie,
+      });
+      return;
+    }
+
+    try {
+      const user = await exchangeDiscordAuthorizationCode(code);
+      const token = createDiscordSessionToken(user, config.authTokenSecret);
+      if (!token) throw new Error('KikiWeb could not create a login session.');
+      redirect(response, clientAuthRedirect(token), { 'set-cookie': clearStateCookie });
+    } catch (error) {
+      console.error('KikiWeb Discord login failed:', error instanceof Error ? error.message : error);
+      redirect(response, clientAuthRedirect('', 'Discordログインに失敗しました。'), {
+        'set-cookie': clearStateCookie,
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/auth/me') {
+    const user = authenticatedDiscordUser(request);
+    if (!user) {
+      sendJson(response, 401, { ok: false, error: 'Login required.' });
+      return;
+    }
+    sendJson(response, 200, { ok: true, user });
+    return;
+  }
+
   if (request.method === 'POST' && url.pathname === '/chat') {
-    if (!config.talkToken) {
+    const authenticatedUser = authenticatedDiscordUser(request);
+    const hiddenChatAuthorized =
+      Boolean(config.talkToken) && request.headers['x-talk-token'] === config.talkToken;
+    if (!config.talkToken && !discordOAuthConfigured()) {
       sendJson(response, 503, { ok: false, error: 'Chat is not configured.' });
       return;
     }
-    if (request.headers['x-talk-token'] !== config.talkToken) {
+    if (!authenticatedUser && !hiddenChatAuthorized) {
       sendJson(response, 401, { ok: false, error: 'Unauthorized.' });
       return;
     }
@@ -79,7 +148,7 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const rateLimitKey = `${clientAddress(request)}:${serverId}`;
+    const rateLimitKey = `${authenticatedUser?.id ?? clientAddress(request)}:${serverId}`;
     const retryAfterSeconds = chatRetryAfter(rateLimitKey);
     if (retryAfterSeconds > 0) {
       response.setHeader('Retry-After', String(retryAfterSeconds));
@@ -87,7 +156,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     try {
-      await requestBotChatPost(stream, content);
+      await requestBotChatPost(stream, content, authenticatedUser?.name ?? '');
       sendJson(response, 200, { ok: true });
     } catch (error) {
       console.error('KikiWeb Bot chat post failed:', error instanceof Error ? error.message : error);
@@ -130,6 +199,7 @@ const publicStatus = () => {
     channels: CHANNELS,
     servers: activeStreams.map(publicStreamStatus),
     guildCount,
+    authConfigured: discordOAuthConfigured(),
     listeners: activeStreams.reduce((total, stream) => total + stream.mixer.clientCount(), 0),
     mixerActiveSpeakers: activeStreams.reduce(
       (total, stream) => total + stream.mixer.activeSpeakerCount(),
@@ -260,7 +330,7 @@ const publishChatMessage = (stream, message) => {
   }
 };
 
-const requestBotChatPost = (stream, content) =>
+const requestBotChatPost = (stream, content, authorName = '') =>
   new Promise((resolve, reject) => {
     if (stream.ingestClient?.readyState !== WebSocket.OPEN) {
       reject(new Error('The selected Discord Bot is not connected.'));
@@ -268,7 +338,7 @@ const requestBotChatPost = (stream, content) =>
     }
 
     const requestId = randomUUID();
-    const command = createChatPostCommand(requestId, stream.chatChannelId, content);
+    const command = createChatPostCommand(requestId, stream.chatChannelId, content, authorName);
     if (!command) {
       reject(new Error('The Discord chat request is invalid.'));
       return;
@@ -409,6 +479,106 @@ const readJsonBody = (request, limit = 16_384) =>
     request.on('error', fail);
   });
 
+const validHttpUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const discordOAuthConfigured = () =>
+  /^\d{1,20}$/.test(config.discordOAuthClientId) &&
+  config.discordOAuthClientSecret.length > 0 &&
+  validHttpUrl(config.discordOAuthRedirectUri) &&
+  validHttpUrl(config.clientOrigin) &&
+  config.clientOrigin !== '*' &&
+  config.authTokenSecret.length >= 32;
+
+const bearerToken = (request) => {
+  const match = String(request.headers.authorization ?? '').match(/^Bearer ([A-Za-z0-9._-]+)$/);
+  return match?.[1] ?? '';
+};
+
+const authenticatedDiscordUser = (request) =>
+  verifyDiscordSessionToken(bearerToken(request), config.authTokenSecret);
+
+const webSocketSessionToken = (request) => {
+  const protocol = String(request.headers['sec-websocket-protocol'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith('kikiweb.auth.'));
+  return protocol?.slice('kikiweb.auth.'.length) ?? '';
+};
+
+const readCookie = (header, name) => {
+  for (const part of String(header ?? '').split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return '';
+    }
+  }
+  return '';
+};
+
+const oauthStateCookie = (value, maxAge = 600) => {
+  const secure = config.discordOAuthRedirectUri.startsWith('https:') ? '; Secure' : '';
+  return `kikiweb_oauth_state=${encodeURIComponent(value)}; Path=/auth/discord/callback; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+};
+
+const redirect = (response, location, headers = {}) => {
+  response.writeHead(302, { location: String(location), 'cache-control': 'no-store', ...headers });
+  response.end();
+};
+
+const clientAuthRedirect = (token = '', error = '') => {
+  let destination;
+  try {
+    destination = new URL(config.clientOrigin);
+  } catch {
+    destination = new URL('http://localhost:5173');
+  }
+  destination.hash = token
+    ? `auth=${token}`
+    : `auth_error=${encodeURIComponent(error || 'Discordログインに失敗しました。')}`;
+  return destination;
+};
+
+const exchangeDiscordAuthorizationCode = async (code) => {
+  const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: config.discordOAuthClientId,
+      client_secret: config.discordOAuthClientSecret,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: config.discordOAuthRedirectUri,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!tokenResponse.ok) throw new Error(`Discord token exchange returned ${tokenResponse.status}.`);
+  const tokenPayload = await tokenResponse.json();
+  const accessToken = String(tokenPayload?.access_token ?? '');
+  if (!accessToken) throw new Error('Discord did not return an access token.');
+
+  const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'user-agent': 'KikiWeb (https://kikiweb-seven.vercel.app, 1.0)',
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!userResponse.ok) throw new Error(`Discord user lookup returned ${userResponse.status}.`);
+  const user = normalizeDiscordUser(await userResponse.json());
+  if (!user) throw new Error('Discord returned an invalid user profile.');
+  return user;
+};
+
 const clientAddress = (request) => {
   const forwarded = String(request.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
   return forwarded || request.socket.remoteAddress || 'unknown';
@@ -454,16 +624,23 @@ server.on('upgrade', (request, socket, head) => {
     return;
   }
 
-  const expectedToken =
-    url.pathname === '/ingest'
-      ? config.ingestToken
-      : url.pathname === '/talk' || url.pathname === '/chat-stream'
-        ? config.talkToken
-        : config.listenToken;
-  if (
-    ((url.pathname === '/talk' || url.pathname === '/chat-stream') && !expectedToken) ||
-    (expectedToken && url.searchParams.get('token') !== expectedToken)
-  ) {
+  let authorized = true;
+  if (url.pathname === '/ingest') {
+    authorized = !config.ingestToken || url.searchParams.get('token') === config.ingestToken;
+  } else if (url.pathname === '/talk') {
+    authorized = Boolean(config.talkToken) && url.searchParams.get('token') === config.talkToken;
+  } else if (url.pathname === '/chat-stream') {
+    const sessionUser = verifyDiscordSessionToken(
+      webSocketSessionToken(request),
+      config.authTokenSecret,
+    );
+    const hiddenChatAuthorized =
+      Boolean(config.talkToken) && url.searchParams.get('token') === config.talkToken;
+    authorized = Boolean(sessionUser || hiddenChatAuthorized);
+  } else if (url.pathname === '/audio') {
+    authorized = !config.listenToken || url.searchParams.get('token') === config.listenToken;
+  }
+  if (!authorized) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;

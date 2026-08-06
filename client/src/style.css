@@ -189,9 +189,10 @@ code {
   box-shadow: 0 12px 42px var(--shadow);
 }
 
-.top-nav div {
+.top-nav-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -217,6 +218,38 @@ code {
 .top-nav a[aria-current="page"] {
   color: #ffffff;
   background: var(--primary);
+}
+
+.discord-auth-button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-color: var(--primary);
+  color: #ffffff;
+  background: var(--primary);
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.discord-auth-button:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+.discord-auth-button.authenticated {
+  max-width: 210px;
+  border-color: var(--line-soft);
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.discord-auth-button.authenticated span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .theme-toggle {
@@ -1173,7 +1206,7 @@ h2 {
     padding: 12px;
   }
 
-  .top-nav div {
+  .top-nav-actions {
     justify-content: flex-start;
   }
 

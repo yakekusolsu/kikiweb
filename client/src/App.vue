@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, ExternalLink, MessageCircle, Moon, Send, Sun } from '@lucide/vue';
+import { ChevronDown, ExternalLink, LogIn, LogOut, MessageCircle, Moon, Send, Sun } from '@lucide/vue';
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { getInitialTheme, saveTheme, type Theme } from './theme';
 
@@ -29,6 +29,7 @@ type ServerStatus = {
 type ApiStatus = {
   servers: ServerStatus[];
   guildCount: number | null;
+  authConfigured?: boolean;
   listeners: number;
   mixerActiveSpeakers: number;
   lastAudioAt: number;
@@ -44,6 +45,11 @@ type ApiStatus = {
     ingestConnected: boolean;
     lastIngestAt: number;
   };
+};
+
+type DiscordAuthUser = {
+  id: string;
+  name: string;
 };
 
 type ChatItem = {
@@ -133,9 +139,32 @@ const storedToggle = (key: string, fallback: boolean) => {
   return value === null ? fallback : value === 'on';
 };
 
+const discordAuthStorageKey = 'kikiweb-discord-session';
+const consumeDiscordAuthRedirect = () => {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#auth=') && !hash.startsWith('#auth_error=')) return '';
+
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get('auth') ?? '';
+  const error = params.get('auth_error') ?? '';
+  if (token) window.localStorage.setItem(discordAuthStorageKey, token);
+  window.history.replaceState(
+    null,
+    '',
+    `${window.location.pathname}${window.location.search}#/`,
+  );
+  return error;
+};
+
+const initialDiscordAuthError = consumeDiscordAuthRedirect();
+
 const apiBaseUrl = ref(import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787');
 const listenToken = ref(import.meta.env.VITE_LISTEN_TOKEN || '');
 const talkToken = ref(import.meta.env.VITE_TALK_TOKEN || '');
+const discordAuthToken = ref(window.localStorage.getItem(discordAuthStorageKey) || '');
+const discordUser = ref<DiscordAuthUser | null>(null);
+const discordAuthState = ref<'idle' | 'checking' | 'authenticated' | 'error'>('idle');
+const discordAuthError = ref(initialDiscordAuthError);
 const status = ref<ApiStatus | null>(null);
 const statusError = ref('');
 const playerState = ref<'idle' | 'connecting' | 'playing' | 'stopped' | 'error'>('idle');
@@ -371,6 +400,50 @@ const applyTalkEcho = () => {
 };
 
 const normalizedApiUrl = computed(() => apiBaseUrl.value.replace(/\/$/, ''));
+const refreshDiscordSession = async () => {
+  if (!discordAuthToken.value) {
+    discordUser.value = null;
+    discordAuthState.value = 'idle';
+    return;
+  }
+
+  discordAuthState.value = 'checking';
+  try {
+    const response = await fetch(`${normalizedApiUrl.value}/auth/me`, {
+      headers: { authorization: `Bearer ${discordAuthToken.value}` },
+    });
+    if (!response.ok) throw new Error('Discordログインの有効期限が切れました。');
+    const result = await response.json();
+    if (!result?.user?.id || !result?.user?.name) throw new Error('Discordユーザーを確認できませんでした。');
+    discordUser.value = result.user as DiscordAuthUser;
+    discordAuthState.value = 'authenticated';
+    discordAuthError.value = '';
+  } catch (error) {
+    window.localStorage.removeItem(discordAuthStorageKey);
+    discordAuthToken.value = '';
+    discordUser.value = null;
+    discordAuthState.value = 'error';
+    discordAuthError.value = error instanceof Error ? error.message : 'Discordログインを確認できませんでした。';
+  }
+};
+
+const startDiscordLogin = () => {
+  discordAuthError.value = '';
+  if (status.value?.authConfigured === false) {
+    discordAuthError.value = 'RenderのDiscord OAuth2環境変数が未設定です。';
+    return;
+  }
+  window.location.assign(`${normalizedApiUrl.value}/auth/discord`);
+};
+
+const logoutDiscord = () => {
+  window.localStorage.removeItem(discordAuthStorageKey);
+  discordAuthToken.value = '';
+  discordUser.value = null;
+  discordAuthState.value = 'idle';
+  discordAuthError.value = '';
+};
+
 const currentPage = computed(() => {
   if (route.value === '#/guide') return 'guide';
   if (route.value === '#/extensions') return 'extensions';
@@ -379,6 +452,9 @@ const currentPage = computed(() => {
   if (route.value === '#/links') return 'links';
   return 'home';
 });
+const chatAuthorized = computed(
+  () => talkUnlocked.value || (discordAuthState.value === 'authenticated' && discordUser.value !== null),
+);
 const availableServers = computed(() => status.value?.servers ?? []);
 const selectedServer = computed(
   () => availableServers.value.find((server) => server.id === selectedServerId.value) ?? null,
@@ -492,7 +568,9 @@ const chatWsUrl = computed(() => {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/chat-stream';
   if (selectedServerId.value) url.searchParams.set('serverId', selectedServerId.value);
-  if (talkToken.value) url.searchParams.set('token', talkToken.value);
+  if (!discordAuthToken.value && talkToken.value) {
+    url.searchParams.set('token', talkToken.value);
+  }
   return url.toString();
 });
 
@@ -534,14 +612,16 @@ const closeChatStream = (clearMessages = false) => {
 
 const connectChatStream = () => {
   closeChatStream(true);
-  if (!talkUnlocked.value || currentPage.value !== 'home' || !selectedServerId.value) return;
-  if (!talkToken.value) {
+  if (!chatAuthorized.value || currentPage.value !== 'home' || !selectedServerId.value) return;
+  if (!discordAuthToken.value && !talkToken.value) {
     chatConnectionState.value = 'error';
     return;
   }
 
   chatConnectionState.value = 'connecting';
-  const nextSocket = new WebSocket(chatWsUrl.value);
+  const nextSocket = discordUser.value && discordAuthToken.value
+    ? new WebSocket(chatWsUrl.value, [`kikiweb.auth.${discordAuthToken.value}`])
+    : new WebSocket(chatWsUrl.value);
   chatSocket = nextSocket;
   nextSocket.onopen = () => {
     if (chatSocket === nextSocket) chatConnectionState.value = 'connected';
@@ -622,9 +702,9 @@ const sendChatMessage = async () => {
     chatError.value = '接続中のDiscordサーバーを選択してください。';
     return;
   }
-  if (!talkToken.value) {
+  if (!discordUser.value && !talkToken.value) {
     chatState.value = 'error';
-    chatError.value = 'チャット用トークンが設定されていません。';
+    chatError.value = 'Discordへログインしてください。';
     return;
   }
   if (!content) {
@@ -640,12 +720,15 @@ const sendChatMessage = async () => {
 
   chatState.value = 'sending';
   try {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (discordUser.value && discordAuthToken.value) {
+      headers.authorization = `Bearer ${discordAuthToken.value}`;
+    } else {
+      headers['x-talk-token'] = talkToken.value;
+    }
     const response = await fetch(`${normalizedApiUrl.value}/chat`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-talk-token': talkToken.value,
-      },
+      headers,
       body: JSON.stringify({ serverId: selectedServerId.value, content }),
     });
     const result = await response.json().catch(() => null);
@@ -724,7 +807,7 @@ const fetchStatus = async () => {
         serverList.find((server) => server.state === 'ready')?.id ?? serverList[0]?.id ?? '';
     }
     sendUserVolumes();
-    if (talkUnlocked.value && !chatSocket && currentPage.value === 'home') {
+    if (chatAuthorized.value && !chatSocket && currentPage.value === 'home') {
       connectChatStream();
     }
   } catch (error) {
@@ -1027,6 +1110,7 @@ const syncRoute = () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 };
 
+void refreshDiscordSession();
 fetchStatus();
 statusTimer = window.setInterval(fetchStatus, 5_000);
 window.addEventListener('hashchange', syncRoute);
@@ -1074,11 +1158,11 @@ watch(selectedServerId, (value, previousValue) => {
     stopTalking();
   }
 
-  if (talkUnlocked.value && value !== previousValue) connectChatStream();
+  if (chatAuthorized.value && value !== previousValue) connectChatStream();
 });
 
-watch(talkUnlocked, (unlocked) => {
-  if (unlocked) connectChatStream();
+watch(chatAuthorized, (authorized) => {
+  if (authorized) connectChatStream();
   else closeChatStream(true);
 });
 
@@ -1171,7 +1255,7 @@ watch(currentPage, (page) => {
   if (page !== 'home' && (talkState.value === 'talking' || talkState.value === 'connecting')) {
     stopTalking();
   }
-  if (page === 'home' && talkUnlocked.value) connectChatStream();
+  if (page === 'home' && chatAuthorized.value) connectChatStream();
   else closeChatStream(false);
 });
 
@@ -1193,17 +1277,39 @@ onBeforeUnmount(() => {
     class="app-shell"
     :class="{
       'document-layout': currentPage !== 'home',
-      'chat-layout': currentPage === 'home' && talkUnlocked,
+      'chat-layout': currentPage === 'home' && chatAuthorized,
     }"
   >
     <nav class="top-nav" aria-label="ページ">
       <a href="#/" :aria-current="currentPage === 'home' ? 'page' : undefined" @click="recordSecretAction('home')">KikiWeb</a>
-      <div>
+      <div class="top-nav-actions">
         <a href="#/guide" :aria-current="currentPage === 'guide' ? 'page' : undefined">Bot導入・使い方</a>
         <a href="#/extensions" :aria-current="currentPage === 'extensions' ? 'page' : undefined">拡張機能</a>
         <a href="#/links" :aria-current="currentPage === 'links' ? 'page' : undefined" @click="recordSecretAction('links')">リンク</a>
         <a href="#/terms" :aria-current="currentPage === 'terms' ? 'page' : undefined" @click="recordSecretAction('terms')">利用規約</a>
         <a href="#/privacy" :aria-current="currentPage === 'privacy' ? 'page' : undefined">プライバシーポリシー</a>
+        <button
+          v-if="discordUser"
+          class="discord-auth-button authenticated"
+          type="button"
+          :title="`${discordUser.name}からログアウト`"
+          :aria-label="`${discordUser.name}からログアウト`"
+          @click="logoutDiscord"
+        >
+          <span>{{ discordUser.name }}</span>
+          <LogOut :size="17" aria-hidden="true" />
+        </button>
+        <button
+          v-else
+          class="discord-auth-button"
+          type="button"
+          :disabled="discordAuthState === 'checking'"
+          aria-label="Discordでログイン"
+          @click="startDiscordLogin"
+        >
+          <LogIn :size="17" aria-hidden="true" />
+          <span>{{ discordAuthState === 'checking' ? '確認中' : 'Discordログイン' }}</span>
+        </button>
         <button
           class="theme-toggle"
           type="button"
@@ -1560,11 +1666,12 @@ onBeforeUnmount(() => {
 
       <p v-if="playerError" class="error">{{ playerError }}</p>
       <p v-if="talkUnlocked && talkError" class="error">{{ talkError }}</p>
+      <p v-if="discordAuthError" class="error">Discordログイン: {{ discordAuthError }}</p>
       <p v-if="statusError" class="error">Status API: {{ statusError }}</p>
       <p v-if="status?.discord.error" class="error">Discord: {{ status.discord.error }}</p>
     </section>
 
-    <aside v-if="currentPage === 'home' && talkUnlocked" class="chat-panel" aria-label="Discordチャット">
+    <aside v-if="currentPage === 'home' && chatAuthorized" class="chat-panel" aria-label="Discordチャット">
       <header class="chat-panel-header">
         <MessageCircle :size="21" aria-hidden="true" />
         <div>
@@ -1627,7 +1734,7 @@ onBeforeUnmount(() => {
         <div class="chat-composer-heading">
           <div>
             <span>Discord Bot</span>
-            <strong>KikiWeb on Chat</strong>
+            <strong>{{ discordUser ? `${discordUser.name} で送信` : 'KikiWeb on Chat' }}</strong>
           </div>
           <small>{{ chatMessage.length }} / 1000</small>
         </div>
@@ -1729,7 +1836,23 @@ onBeforeUnmount(() => {
         </li>
       </ol>
 
-      <h2>5. 中継・自動参加を終了</h2>
+      <h2>5. Discordログインでチャットを使う</h2>
+      <ol class="guide-steps">
+        <li>
+          <strong>Discordでログイン</strong>
+          <span>ページ上部の「Discordログイン」を押して認証します。取得する権限はプロフィール確認だけです。</span>
+        </li>
+        <li>
+          <strong>VCチャットへ投稿</strong>
+          <span>接続中のサーバーを選ぶとチャット欄が表示されます。送信内容は <code>表示名 &gt;&gt; 本文</code> の形式でBotから投稿されます。</span>
+        </li>
+        <li>
+          <strong>マイクは有効になりません</strong>
+          <span>Discordログインで利用できるのはチャットだけです。ログインによってブラウザのマイク権限が要求されることはありません。</span>
+        </li>
+      </ol>
+
+      <h2>6. 中継・自動参加を終了</h2>
       <ol class="guide-steps">
         <li>
           <strong>自動参加を解除</strong>
@@ -1853,7 +1976,7 @@ onBeforeUnmount(() => {
 
       <h2>4. 認証情報の管理</h2>
       <p>
-        Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
+        Discordログインのセッション、Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
       </p>
 
       <h2>5. サービスの停止・変更</h2>
@@ -1879,7 +2002,7 @@ onBeforeUnmount(() => {
 
       <h2>1. 取得する情報</h2>
       <p>
-        KikiWeb は、サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。チャット表示では、Discordのメッセージ本文、送信者ID、表示名、Bot・Webhook判定、送信時刻を一時的に扱います。個別音量の設定値は利用者のブラウザ内に保存されます。
+        KikiWeb は、Discordログイン時にDiscordユーザーIDと表示名を取得します。サービス運用に必要な範囲で Discord Bot の接続状態、ボイスチャンネル ID、接続リスナー数、アクティブスピーカー数、エラー情報を扱います。ユーザー別音量機能では、接続中のDiscordユーザーID、表示名、Bot判定、ミュート状態を一時的に扱います。チャット表示では、Discordのメッセージ本文、送信者ID、表示名、Bot・Webhook判定、送信時刻を一時的に扱います。ログインセッションと個別音量の設定値は利用者のブラウザ内に保存されます。
       </p>
 
       <h2>2. 音声・チャットデータの扱い</h2>
@@ -1887,27 +2010,32 @@ onBeforeUnmount(() => {
         ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で受信・入力したメッセージは、Web表示とKikiWeb BotによるDiscordへの送信のために処理され、直近50件のみRelayのメモリ上に一時保持されます。KikiWeb on ChatのVC読み上げが有効な場合、投稿本文は音声生成のためMicrosoftのオンライン音声合成サービスへ送信されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
       </p>
 
-      <h2>3. 利用目的</h2>
+      <h2>3. Discordログイン情報の扱い</h2>
+      <p>
+        Discordログインではプロフィール確認権限のみを使用します。Discordのアクセストークンはログイン確認中だけRender上で処理し、KikiWebのファイルやデータベースには保存しません。確認後はDiscordユーザーIDと表示名を含む有効期間7日間の署名付きセッションを発行し、利用者のブラウザに保存します。ログインはチャット投稿の本人表示にのみ使用し、マイク機能を有効にしません。
+      </p>
+
+      <h2>4. 利用目的</h2>
       <p>
         取得した情報は、音声配信、接続状態の表示、障害調査、不正利用の防止、サービス改善のために利用します。
       </p>
 
-      <h2>4. 第三者サービス</h2>
+      <h2>5. 第三者サービス</h2>
       <p>
         本サービスは Discord、Render、Vercel、Microsoftのオンライン音声合成サービスなどの外部サービスを利用します。各サービス上で扱われる情報は、それぞれのプライバシーポリシーや利用規約に従って処理されます。
       </p>
 
-      <h2>5. ログと環境変数</h2>
+      <h2>6. ログと環境変数</h2>
       <p>
         サーバーログには接続状態やエラーが記録される場合があります。Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN などの秘密情報をログや公開リポジトリに含めないよう管理してください。
       </p>
 
-      <h2>6. 情報の共有</h2>
+      <h2>7. 情報の共有</h2>
       <p>
         法令に基づく場合、サービス保護のために必要な場合、または利用者の同意がある場合を除き、取得した情報を第三者へ提供しません。
       </p>
 
-      <h2>7. お問い合わせ</h2>
+      <h2>8. お問い合わせ</h2>
       <p>
         本ポリシーに関する問い合わせ先は、サービス運営者が管理する Discord サーバー、Web サイト、またはリポジトリ上で案内される連絡先とします。
       </p>

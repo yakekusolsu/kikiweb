@@ -518,6 +518,7 @@ class KikiWebVoiceRelay:
         try:
             channel_id = int(payload.get("channelId", 0))
             content = str(payload.get("content", "")).strip()
+            author_name = " ".join(str(payload.get("authorName", "")).split())[:32]
             if len(request_id) < 8 or channel_id != self.chat_channel_id:
                 raise ValueError("The Discord chat request did not match the connected VC.")
             if not content or len(content) > 1_000:
@@ -534,8 +535,9 @@ class KikiWebVoiceRelay:
             if not isinstance(channel, discord.abc.Messageable):
                 raise RuntimeError("The connected VC does not support text messages.")
 
+            discord_content = f"{author_name} >> {content}" if author_name else content
             message = await channel.send(
-                content,
+                discord_content,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             self.enqueue_chat_message(message)

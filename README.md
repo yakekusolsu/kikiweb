@@ -126,8 +126,9 @@ Botユーザーも対象ですが、音声を中継しているKikiWeb Bot自身
 
 ### Botチャット
 
-隠し操作で送話機能を表示すると、同じ画面にチャット入力欄も表示されます。選択中のDiscordサーバーに
-接続しているKikiWeb Bot自身がVCチャットへ投稿します。サーバーごとのWebhook登録は不要です。投稿時の
+Webサイト上部からDiscordへログインすると、隠し操作なしでチャット入力欄が表示されます。ログインが有効にするのは
+チャットだけで、ブラウザのマイク機能は有効になりません。選択中のDiscordサーバーに接続しているKikiWeb Bot自身が
+`Discord表示名 >> 本文`の形式でVCチャットへ投稿します。サーバーごとのWebhook登録は不要です。投稿時の
 Discordメンションは無効で、スパム対策としてURLを含む投稿も拒否します。Botに対象VCの「チャンネルを見る」と
 「メッセージを送信」権限を与えてください。
 
@@ -142,6 +143,18 @@ Discord Developer PortalのBot設定で`Message Content Intent`をONにしてく
 「チャンネルを見る」と「メッセージ履歴を読む」権限も必要です。既存Botへ組み込む場合は、Bot生成時の
 `discord.Intents`でも`message_content = True`を設定して再起動します。
 
+### Discordログイン
+
+Discord Developer Portalの対象Applicationで、OAuth2 Redirectsに次のURLを追加します。
+
+```text
+https://kikiweb.onrender.com/auth/discord/callback
+```
+
+RenderのサービスURLが異なる場合は、そのURLに`/auth/discord/callback`を付けてください。OAuth2では
+`identify`スコープだけを要求し、取得したDiscordアクセストークンはプロフィール確認後に破棄します。
+KikiWebのログイン状態はRenderが発行する有効期間7日間の署名付きセッションで管理します。
+
 ## Render
 
 Render ではこのリポジトリの `render.yaml` を使えます。環境変数は Render のダッシュボードで設定してください。
@@ -149,7 +162,11 @@ Render ではこのリポジトリの `render.yaml` を使えます。環境変�
 - `CLIENT_ORIGIN`: Vercel の URL。例: `https://your-app.vercel.app`
 - `INGEST_TOKEN`: Python Bot から relay へ音声を送るためのトークン
 - `LISTEN_TOKEN`: 任意。設定すると、この値を知っている人だけが聞けます。
-- `TALK_TOKEN`: Webマイク送話・Botチャット用。十分長いランダムな値を設定します。
+- `TALK_TOKEN`: 隠しマイク送話用。十分長いランダムな値を設定します。
+- `DISCORD_OAUTH_CLIENT_ID`: Discord Developer Portalに表示されるApplication ID
+- `DISCORD_OAUTH_CLIENT_SECRET`: Discord Developer PortalのOAuth2 Client Secret
+- `DISCORD_OAUTH_REDIRECT_URI`: Renderの`/auth/discord/callback` URL
+- `AUTH_TOKEN_SECRET`: 32文字以上のランダムなセッション署名鍵。Render Blueprintでは自動生成されます。
 
 Discord Bot の `DISCORD_TOKEN` は Render ではなく、既存 Python Bot を動かしている環境に設定してください。
 複数サーバーでも Render の `INGEST_TOKEN` と Bot の `KIKIWEB_INGEST_TOKEN` は同じ1組を使います。
@@ -160,7 +177,7 @@ Vercel の Project Root は `client` にしてください。
 
 - `VITE_API_BASE_URL`: Render の URL。例: `https://kikiweb-api.onrender.com`
 - `VITE_LISTEN_TOKEN`: Render 側で `LISTEN_TOKEN` を設定した場合のみ同じ値
-- `VITE_TALK_TOKEN`: Render 側の `TALK_TOKEN` と同じ値。マイク送話とBotチャットで使います。サイト内に埋め込まれるため、本格運用では別途ログイン機能を追加してください。
+- `VITE_TALK_TOKEN`: Render 側の `TALK_TOKEN` と同じ値。隠しマイク送話で使います。通常のチャットはDiscordログインで認証します。
 
 ## Google Chrome 拡張機能
 

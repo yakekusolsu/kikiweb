@@ -28,12 +28,21 @@ test('blocks URL-like content without blocking ordinary version text', () => {
 });
 
 test('creates a command for the connected Discord Bot', () => {
-  assert.deepEqual(createChatPostCommand('request-123', '1234567890', ' KikiWebからこんにちは '), {
-    type: 'chat-post',
-    requestId: 'request-123',
-    channelId: '1234567890',
-    content: 'KikiWebからこんにちは',
-  });
+  assert.deepEqual(
+    createChatPostCommand(
+      'request-123',
+      '1234567890',
+      ' KikiWebからこんにちは ',
+      ' Login\n User ',
+    ),
+    {
+      type: 'chat-post',
+      requestId: 'request-123',
+      channelId: '1234567890',
+      content: 'KikiWebからこんにちは',
+      authorName: 'Login User',
+    },
+  );
   assert.equal(createChatPostCommand('short', '1234567890', 'hello'), null);
   assert.equal(createChatPostCommand('request-123', 'invalid', 'hello'), null);
   assert.equal(createChatPostCommand('request-123', '1234567890', 'https://example.com'), null);
