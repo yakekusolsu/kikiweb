@@ -810,8 +810,9 @@ class KikiWebVoiceRelay:
 
     def _voice_status(self) -> dict[str, object]:
         channel = getattr(self.voice_client, "channel", None)
+        client = getattr(self.voice_client, "client", None)
         channel_members = list(getattr(channel, "members", []))
-        bot_user = getattr(getattr(self.voice_client, "client", None), "user", None)
+        bot_user = getattr(client, "user", None)
         audio_members = [
             member
             for member in channel_members
@@ -825,6 +826,7 @@ class KikiWebVoiceRelay:
         )
         return {
             "type": "voice-status",
+            "guildCount": len(getattr(client, "guilds", [])),
             "memberCount": len(members),
             "mutedCount": muted_members,
             "users": [

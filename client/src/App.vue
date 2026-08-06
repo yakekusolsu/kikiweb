@@ -28,6 +28,7 @@ type ServerStatus = {
 
 type ApiStatus = {
   servers: ServerStatus[];
+  guildCount: number | null;
   listeners: number;
   mixerActiveSpeakers: number;
   lastAudioAt: number;
@@ -1244,6 +1245,10 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="status-strip">
+        <div>
+          <span>導入サーバー</span>
+          <strong>{{ status?.guildCount ?? '未取得' }}</strong>
+        </div>
         <div>
           <span>Bot</span>
           <strong>{{ stateLabel }}</strong>

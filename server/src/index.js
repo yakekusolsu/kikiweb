@@ -149,11 +149,13 @@ const wss = new WebSocketServer({ noServer: true });
 
 const publicStatus = () => {
   const activeStreams = [...streams.values()].filter((stream) => stream.ingestClient);
+  const guildCount = Math.max(0, ...activeStreams.map((stream) => stream.guildCount ?? 0)) || null;
   return {
     ok: true,
     sampleRate: SAMPLE_RATE,
     channels: CHANNELS,
     servers: activeStreams.map(publicStreamStatus),
+    guildCount,
     listeners: activeStreams.reduce((total, stream) => total + stream.mixer.clientCount(), 0),
     mixerActiveSpeakers: activeStreams.reduce(
       (total, stream) => total + stream.mixer.activeSpeakerCount(),
@@ -233,6 +235,7 @@ const streamFromIngestUrl = (url) => {
       lastIngestAt: 0,
       memberCount: 0,
       mutedCount: 0,
+      guildCount: null,
       users: [],
       mixer: new AudioMixer(STREAM_VOICE),
       soundboardMixer: new AudioMixer(STREAM_SOUNDBOARD),
@@ -469,6 +472,7 @@ wss.on('connection', (ws, _request, url) => {
     stream.ingestClient = ws;
     stream.memberCount = 0;
     stream.mutedCount = 0;
+    stream.guildCount = null;
     stream.users = [];
     void configureStreamChatChannel(stream);
     ws.on('message', (message, isBinary) => {
@@ -476,12 +480,14 @@ wss.on('connection', (ws, _request, url) => {
         try {
           const payload = JSON.parse(message.toString());
           if (payload.type === 'voice-status') {
+            const guildCount = parseCount(payload.guildCount);
             const memberCount = parseCount(payload.memberCount);
             const mutedCount = parseCount(payload.mutedCount);
             if (memberCount === null || mutedCount === null) return;
             stream.memberCount = memberCount;
             stream.mutedCount = Math.min(mutedCount, memberCount);
             stream.users = parseVoiceUsers(payload.users);
+            if (guildCount !== null) stream.guildCount = guildCount;
           } else if (payload.type === 'chat-message') {
             const chatMessage = normalizeDiscordChatMessage(payload, stream.chatChannelId);
             if (chatMessage) {
