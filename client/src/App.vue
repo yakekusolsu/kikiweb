@@ -589,6 +589,8 @@ const chatTime = (timestamp: string) => {
 };
 
 const chatInitial = (name: string) => Array.from(name.trim())[0]?.toUpperCase() || '?';
+const chatUrlPattern = /(?:\b(?:https?|ftp):\/\/|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#][^\s]*)?|(?:\d{1,3}\.){3}\d{1,3}(?:[/:?#][^\s]*)?)/iu;
+const chatContainsUrl = (content: string) => chatUrlPattern.test(content.normalize('NFKC'));
 
 const chatContentParts = (content: string): ChatContentPart[] =>
   content.split('\n').map((line) => {
@@ -628,6 +630,11 @@ const sendChatMessage = async () => {
   if (!content) {
     chatState.value = 'error';
     chatError.value = 'メッセージを入力してください。';
+    return;
+  }
+  if (chatContainsUrl(content)) {
+    chatState.value = 'error';
+    chatError.value = 'URLを含むメッセージは送信できません。';
     return;
   }
 

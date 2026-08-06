@@ -1,4 +1,5 @@
 export const CHAT_MAX_LENGTH = 1_000;
+const CHAT_URL_PATTERN = /(?:\b(?:https?|ftp):\/\/|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#][^\s]*)?|(?:\d{1,3}\.){3}\d{1,3}(?:[/:?#][^\s]*)?)/iu;
 
 export const normalizeChatMessage = (value) => {
   if (typeof value !== 'string') return null;
@@ -7,6 +8,9 @@ export const normalizeChatMessage = (value) => {
   return normalized;
 };
 
+export const containsChatUrl = (value) =>
+  typeof value === 'string' && CHAT_URL_PATTERN.test(value.normalize('NFKC'));
+
 export const createChatPostCommand = (requestId, channelId, value) => {
   const content = normalizeChatMessage(value);
   if (
@@ -14,7 +18,8 @@ export const createChatPostCommand = (requestId, channelId, value) => {
     requestId.length < 8 ||
     requestId.length > 100 ||
     !/^\d{1,20}$/.test(String(channelId)) ||
-    !content
+    !content ||
+    containsChatUrl(content)
   ) {
     return null;
   }

@@ -5,6 +5,7 @@ import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer
 import { appendChatMessage, normalizeDiscordChatMessage } from './chatMessages.js';
 import {
   CHAT_MAX_LENGTH,
+  containsChatUrl,
   createChatPostCommand,
   normalizeChatMessage,
 } from './chatPost.js';
@@ -71,6 +72,10 @@ const server = createServer(async (request, response) => {
         ok: false,
         error: `Message must be between 1 and ${CHAT_MAX_LENGTH} characters.`,
       });
+      return;
+    }
+    if (containsChatUrl(content)) {
+      sendJson(response, 400, { ok: false, error: 'URLを含むメッセージは送信できません。' });
       return;
     }
 

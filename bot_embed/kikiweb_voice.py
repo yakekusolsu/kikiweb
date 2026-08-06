@@ -5,8 +5,10 @@ import contextlib
 import json
 import logging
 import queue
+import re
 import secrets
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -54,6 +56,16 @@ STREAM_SOUNDBOARD = 1
 MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
+CHAT_URL_PATTERN = re.compile(
+    r"(?:\b(?:https?|ftp)://|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+"
+    r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#]\S*)?|"
+    r"(?:\d{1,3}\.){3}\d{1,3}(?:[/:?#]\S*)?)",
+    re.IGNORECASE,
+)
+
+
+def contains_chat_url(value: str) -> bool:
+    return CHAT_URL_PATTERN.search(unicodedata.normalize("NFKC", value)) is not None
 
 
 @dataclass(slots=True)
@@ -510,6 +522,8 @@ class KikiWebVoiceRelay:
                 raise ValueError("The Discord chat request did not match the connected VC.")
             if not content or len(content) > 1_000:
                 raise ValueError("The Discord chat message must be between 1 and 1000 characters.")
+            if contains_chat_url(content):
+                raise ValueError("URLを含むメッセージは送信できません。")
             if not self.voice_client or not self.voice_client.is_connected():
                 raise RuntimeError("The Discord Bot is not connected to the VC.")
 
