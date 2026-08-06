@@ -494,6 +494,7 @@ class KikiWebVoiceRelay:
             channel_id = int(payload.get("channelId", 0))
             content = str(payload.get("content", "")).strip()
             author_name = " ".join(str(payload.get("authorName", "")).split())[:32]
+            tts_content = str(payload.get("ttsContent", content)).strip()
             if len(request_id) < 8 or channel_id != self.chat_channel_id:
                 raise ValueError("The Discord chat request did not match the connected VC.")
             if not content or len(content) > 1_000:
@@ -516,7 +517,7 @@ class KikiWebVoiceRelay:
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             self.enqueue_chat_message(message)
-            self.enqueue_chat_tts(content)
+            self.enqueue_chat_tts(tts_content, author_name)
             result["ok"] = True
         except discord.Forbidden:
             result["error"] = (
@@ -602,10 +603,15 @@ class KikiWebVoiceRelay:
         if self.voice_client and self.voice_client.is_playing():
             self.voice_client.stop()
 
-    def enqueue_chat_tts(self, content: object) -> None:
+    def enqueue_chat_tts(self, content: object, author_name: object = "") -> None:
         if not self.config.chat_tts_enabled or self.closed.is_set():
             return
-        text = " ".join(str(content or "").split())[:MAX_CHAT_TTS_LENGTH]
+        text = " ".join(str(content or "").split())
+        normalized_author = " ".join(str(author_name or "").split())[:32]
+        author_prefix = f"{normalized_author} >>" if normalized_author else ""
+        if author_prefix and text.startswith(author_prefix):
+            text = text[len(author_prefix) :].lstrip()
+        text = text[:MAX_CHAT_TTS_LENGTH]
         if not text:
             return
         if self.chat_tts_queue.full():
@@ -725,7 +731,7 @@ class KikiWebVoiceRelay:
                 elif payload.get("type") == "chat-post":
                     await self.post_chat_message(payload)
                 elif payload.get("type") == "chat-tts":
-                    self.enqueue_chat_tts(payload.get("content"))
+                    self.enqueue_chat_tts(payload.get("content"), payload.get("authorName"))
                 elif payload.get("type") == "chat-channel":
                     try:
                         channel_id = int(payload.get("channelId", 0))

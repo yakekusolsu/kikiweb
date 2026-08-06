@@ -136,6 +136,7 @@ Botは接続中VCのチャットから最新25件と新着メッセージを受�
 サーバーのファイルやデータベースには保存しません。
 
 サイトの`KikiWeb on Chat`からBot投稿に成功した本文だけを、KikiWeb Botが接続中VCへ日本語で読み上げます。
+Discordに表示する`ログイン済みユーザー名 >>`の部分は読み上げません。
 通常のDiscordメッセージや他のBot・Webhookの投稿は対象外です。Bot環境の`KIKIWEB_CHAT_TTS=false`で
 読み上げを無効化でき、`KIKIWEB_CHAT_TTS_VOICE`でedge-ttsの日本語音声を変更できます。
 

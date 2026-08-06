@@ -40,6 +40,7 @@ test('creates a command for the connected Discord Bot', () => {
       requestId: 'request-123',
       channelId: '1234567890',
       content: 'KikiWebからこんにちは',
+      ttsContent: 'KikiWebからこんにちは',
       authorName: 'Login User',
     },
   );

@@ -33,6 +33,7 @@ export const createChatPostCommand = (requestId, channelId, value, authorName = 
     requestId,
     channelId: String(channelId),
     content,
+    ttsContent: content,
     ...(normalizedAuthorName ? { authorName: normalizedAuthorName } : {}),
   };
 };
