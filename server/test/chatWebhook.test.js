@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  createChatTtsMessage,
   CHAT_MAX_LENGTH,
   CHAT_WEBHOOK_USERNAME,
   fetchDiscordWebhookMetadata,
@@ -15,6 +16,14 @@ test('normalizes bounded chat messages', () => {
   assert.equal(normalizeChatMessage('  hello\u0000 world  '), 'hello world');
   assert.equal(normalizeChatMessage(''), null);
   assert.equal(normalizeChatMessage('x'.repeat(CHAT_MAX_LENGTH + 1)), null);
+});
+
+test('creates a Bot-only chat TTS control message', () => {
+  assert.deepEqual(createChatTtsMessage(' KikiWebからこんにちは '), {
+    type: 'chat-tts',
+    content: 'KikiWebからこんにちは',
+  });
+  assert.equal(createChatTtsMessage(''), null);
 });
 
 test('accepts only official Discord webhook URLs', () => {

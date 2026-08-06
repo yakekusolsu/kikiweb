@@ -24,6 +24,11 @@ try:
 except ImportError:
     imageio_ffmpeg = None
 
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -47,6 +52,8 @@ OPUS_SILENCE = b"\xf8\xff\xfe"
 STREAM_VOICE = 0
 STREAM_SOUNDBOARD = 1
 MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
+MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
+MAX_CHAT_TTS_LENGTH = 500
 
 
 @dataclass(slots=True)
@@ -60,6 +67,8 @@ class KikiWebConfig:
     listen_inactivity_timeout: float = 90.0
     status_interval: float = 1.0
     queue_size: int = 160
+    chat_tts_enabled: bool = True
+    chat_tts_voice: str = "ja-JP-NanamiNeural"
 
     def websocket_url(
         self,
@@ -229,9 +238,11 @@ class KikiWebVoiceRelay:
         self.socket: Optional[aiohttp.ClientWebSocketResponse] = None
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=config.queue_size)
         self.chat_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=100)
+        self.chat_tts_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=20)
         self.sender_task: Optional[asyncio.Task[None]] = None
         self.incoming_task: Optional[asyncio.Task[None]] = None
         self.chat_history_task: Optional[asyncio.Task[None]] = None
+        self.chat_tts_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
         self.listen_watchdog_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_lock = asyncio.Lock()
@@ -245,6 +256,8 @@ class KikiWebVoiceRelay:
         self.channel_name = ""
         self.chat_channel_id = 0
         self.web_audio_source = KikiWebWebAudioSource()
+        self.browser_audio_active = False
+        self.chat_tts_playing = False
 
     async def _set_voice_status(
         self,
@@ -358,6 +371,11 @@ class KikiWebVoiceRelay:
             with contextlib.suppress(asyncio.CancelledError):
                 await self.chat_history_task
 
+        if self.chat_tts_task:
+            self.chat_tts_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.chat_tts_task
+
         if self.listen_restart_task:
             self.listen_restart_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -383,9 +401,11 @@ class KikiWebVoiceRelay:
         self.listen_watchdog_task = None
         self.incoming_task = None
         self.chat_history_task = None
+        self.chat_tts_task = None
         self.stop_web_audio()
         self.clear_audio_queue()
         self.clear_chat_queue()
+        self.clear_chat_tts_queue()
 
     def note_voice_packet(self) -> None:
         self.last_voice_packet_at = time.monotonic()
@@ -415,6 +435,14 @@ class KikiWebVoiceRelay:
             try:
                 self.chat_queue.get_nowait()
                 self.chat_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+    def clear_chat_tts_queue(self) -> None:
+        while True:
+            try:
+                self.chat_tts_queue.get_nowait()
+                self.chat_tts_queue.task_done()
             except asyncio.QueueEmpty:
                 break
 
@@ -504,17 +532,138 @@ class KikiWebVoiceRelay:
         ):
             return
 
+        self.browser_audio_active = True
+        if self.chat_tts_playing:
+            return
         self.web_audio_source.feed(pcm)
-        if not self.voice_client.is_playing():
-            try:
-                self.voice_client.play(self.web_audio_source)
-            except discord.ClientException:
-                LOGGER.warning("KikiWeb could not start browser microphone playback in Discord.")
+        self._ensure_web_audio_playing()
+
+    def _ensure_web_audio_playing(self) -> bool:
+        if not self.voice_client or not self.voice_client.is_connected():
+            return False
+        if self.voice_client.is_playing():
+            return True
+        try:
+            self.voice_client.play(self.web_audio_source)
+            return True
+        except discord.ClientException:
+            LOGGER.warning("KikiWeb could not start audio playback in Discord.")
+            return False
 
     def stop_web_audio(self) -> None:
+        self.browser_audio_active = False
+        if self.chat_tts_playing:
+            return
         self.web_audio_source.clear()
         if self.voice_client and self.voice_client.is_playing():
             self.voice_client.stop()
+
+    def enqueue_chat_tts(self, content: object) -> None:
+        if not self.config.chat_tts_enabled or self.closed.is_set():
+            return
+        text = " ".join(str(content or "").split())[:MAX_CHAT_TTS_LENGTH]
+        if not text:
+            return
+        if self.chat_tts_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.chat_tts_queue.get_nowait()
+                self.chat_tts_queue.task_done()
+        self.chat_tts_queue.put_nowait(text)
+        if not self.chat_tts_task or self.chat_tts_task.done():
+            self.chat_tts_task = asyncio.create_task(
+                self._chat_tts_loop(),
+                name=f"kikiweb-chat-tts-{self.server_id}",
+            )
+
+    async def _chat_tts_loop(self) -> None:
+        while not self.closed.is_set():
+            text = await self.chat_tts_queue.get()
+            try:
+                await self._play_chat_tts(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("KikiWeb could not read a Web chat message in Discord.")
+            finally:
+                self.chat_tts_queue.task_done()
+
+    async def _play_chat_tts(self, text: str) -> None:
+        if edge_tts is None:
+            LOGGER.error("KikiWeb chat TTS requires edge-tts on the Discord Bot host.")
+            return
+        if not self.voice_client or not self.voice_client.is_connected():
+            return
+
+        audio_data = bytearray()
+        communicator = edge_tts.Communicate(
+            text,
+            self.config.chat_tts_voice,
+            rate="+5%",
+            volume="+15%",
+        )
+        async for chunk in communicator.stream():
+            if chunk.get("type") != "audio":
+                continue
+            audio_data.extend(chunk.get("data", b""))
+            if len(audio_data) > MAX_CHAT_TTS_BYTES:
+                raise ValueError("Generated chat TTS audio is too large.")
+        if not audio_data:
+            return
+
+        ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe() if imageio_ffmpeg else "ffmpeg"
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg_executable,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-t",
+            "30",
+            "-filter:a",
+            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-f",
+            "s16le",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-ac",
+            str(CHANNELS),
+            "pipe:1",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        pcm, stderr = await process.communicate(bytes(audio_data))
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(detail or f"ffmpeg exited with status {process.returncode}")
+
+        frames = [
+            pcm[offset : offset + FRAME_BYTES]
+            for offset in range(0, len(pcm), FRAME_BYTES)
+            if len(pcm[offset : offset + FRAME_BYTES]) == FRAME_BYTES
+        ]
+        if not frames:
+            return
+
+        self.chat_tts_playing = True
+        self.web_audio_source.clear()
+        try:
+            if not self._ensure_web_audio_playing():
+                return
+            prebuffer_count = min(10, len(frames))
+            for frame in frames[:prebuffer_count]:
+                self.web_audio_source.feed(frame)
+            for frame in frames[prebuffer_count:]:
+                await asyncio.sleep(FRAME_MS / 1000)
+                self.web_audio_source.feed(frame)
+            await asyncio.sleep((prebuffer_count + 2) * FRAME_MS / 1000)
+        finally:
+            self.chat_tts_playing = False
+            if not self.browser_audio_active:
+                self.web_audio_source.clear()
+                if self.voice_client and self.voice_client.is_playing():
+                    self.voice_client.stop()
 
     async def _incoming_loop(self, socket: aiohttp.ClientWebSocketResponse) -> None:
         async for message in socket:
@@ -527,6 +676,8 @@ class KikiWebVoiceRelay:
                     continue
                 if payload.get("type") == "talk-stop":
                     self.stop_web_audio()
+                elif payload.get("type") == "chat-tts":
+                    self.enqueue_chat_tts(payload.get("content"))
                 elif payload.get("type") == "chat-channel":
                     try:
                         channel_id = int(payload.get("channelId", 0))
@@ -950,6 +1101,8 @@ def install_kikiweb_commands(
     relay_url: str,
     ingest_token: str = "",
     voice_status: str = "試聴完全自由！",
+    chat_tts_enabled: bool = True,
+    chat_tts_voice: str = "ja-JP-NanamiNeural",
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = True,
     auto_join_path: str | Path = "kikiweb_auto_join.json",
@@ -959,6 +1112,8 @@ def install_kikiweb_commands(
             relay_url=relay_url,
             ingest_token=ingest_token,
             voice_status=voice_status,
+            chat_tts_enabled=chat_tts_enabled,
+            chat_tts_voice=chat_tts_voice,
         ),
         auto_join_path=auto_join_path,
     )

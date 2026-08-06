@@ -4,6 +4,7 @@ import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer
 import { appendChatMessage, normalizeDiscordChatMessage } from './chatMessages.js';
 import {
   CHAT_MAX_LENGTH,
+  createChatTtsMessage,
   fetchDiscordWebhookMetadata,
   normalizeChatMessage,
   parseChatWebhookUrls,
@@ -120,6 +121,7 @@ const server = createServer(async (request, response) => {
         stream.chatChannelId,
       );
       if (chatMessage) publishChatMessage(stream, chatMessage);
+      requestChatTts(stream, delivered?.content ?? content);
       sendJson(response, 200, { ok: true });
     } catch (error) {
       console.error('KikiWeb chat webhook failed:', error instanceof Error ? error.message : error);
@@ -276,6 +278,17 @@ const publishChatMessage = (stream, message) => {
   const payload = JSON.stringify({ type: 'chat-message', message });
   for (const client of stream.chatClients) {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
+  }
+};
+
+const requestChatTts = (stream, content) => {
+  if (stream.ingestClient?.readyState !== WebSocket.OPEN) return;
+  const message = createChatTtsMessage(content);
+  if (!message) return;
+  try {
+    stream.ingestClient.send(JSON.stringify(message));
+  } catch (error) {
+    console.warn('KikiWeb could not request chat TTS:', error instanceof Error ? error.message : error);
   }
 };
 

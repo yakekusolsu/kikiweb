@@ -50,6 +50,8 @@ install_kikiweb_commands(
     bot,
     relay_url=os.environ["KIKIWEB_RELAY_URL"],
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
+    chat_tts_enabled=os.environ.get("KIKIWEB_CHAT_TTS", "true").lower() not in {"0", "false", "no", "off"},
+    chat_tts_voice=os.environ.get("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural"),
     use_slash_commands=True,
     auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
 )
@@ -75,6 +77,8 @@ DISCORD_TOKEN=Discord Bot token
 KIKIWEB_RELAY_URL=wss://kikiweb.onrender.com/ingest
 KIKIWEB_INGEST_TOKEN=Render の INGEST_TOKEN と同じ値
 KIKIWEB_VOICE_STATUS=試聴完全自由！
+KIKIWEB_CHAT_TTS=true
+KIKIWEB_CHAT_TTS_VOICE=ja-JP-NanamiNeural
 KIKIWEB_AUTO_JOIN_FILE=/home/container/kikiweb_auto_join.json
 DISCORD_GUILD_ID=コマンドをすぐ反映したいサーバーID
 ```
@@ -136,6 +140,10 @@ DISCORD_CHAT_WEBHOOK_URLS={"1209781281165152277":"https://discord.com/api/webhoo
 Botは接続中VCのチャットから最新25件と新着メッセージを受信します。Webには直近50件をメモリ上で表示し、
 サーバーのファイルやデータベースには保存しません。Webhook URLはWebからDiscordへの投稿だけに使用し、
 チャットの読み取り先には影響しません。
+
+`KikiWeb on Chat`から投稿に成功した本文だけを、KikiWeb Botが接続中VCへ日本語で読み上げます。
+通常のDiscordメッセージや他のWebhook、読み上げBotの投稿は対象外です。Bot環境の`KIKIWEB_CHAT_TTS=false`で
+読み上げを無効化でき、`KIKIWEB_CHAT_TTS_VOICE`でedge-ttsの日本語音声を変更できます。
 
 Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。Botには接続先VCの
 「チャンネルを見る」と「メッセージ履歴を読む」権限も必要です。既存Botへ組み込む場合は、Bot生成時の

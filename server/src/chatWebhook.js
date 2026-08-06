@@ -8,6 +8,11 @@ export const normalizeChatMessage = (value) => {
   return normalized;
 };
 
+export const createChatTtsMessage = (value) => {
+  const content = normalizeChatMessage(value);
+  return content ? { type: 'chat-tts', content } : null;
+};
+
 export const isDiscordWebhookUrl = (value) => {
   try {
     const url = new URL(String(value));

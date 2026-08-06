@@ -39,6 +39,13 @@ discord_token = os.getenv("DISCORD_TOKEN", "")
 relay_url = os.getenv("KIKIWEB_RELAY_URL", "wss://kikiweb.onrender.com/ingest")
 ingest_token = os.getenv("KIKIWEB_INGEST_TOKEN", "")
 voice_status = os.getenv("KIKIWEB_VOICE_STATUS", "試聴完全自由！")
+chat_tts_enabled = os.getenv("KIKIWEB_CHAT_TTS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+chat_tts_voice = os.getenv("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural")
 auto_join_file = os.getenv("KIKIWEB_AUTO_JOIN_FILE", "/home/container/kikiweb_auto_join.json")
 
 if not discord_token:
@@ -55,6 +62,8 @@ install_kikiweb_commands(
     relay_url=relay_url,
     ingest_token=ingest_token,
     voice_status=voice_status,
+    chat_tts_enabled=chat_tts_enabled,
+    chat_tts_voice=chat_tts_voice,
     use_slash_commands=True,
     auto_join_path=auto_join_file,
 )
