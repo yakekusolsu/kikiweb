@@ -124,26 +124,17 @@ Botユーザーも対象ですが、音声を中継しているKikiWeb Bot自身
 ユーザー一覧を表示するには、Bot側の`kikiweb_voice.py`を最新版へ更新してBotを再起動してください。
 古い組み込みコードでも中継自体は継続しますが、ユーザー別音量の一覧は表示されません。
 
-### Webhookチャット
+### Botチャット
 
 隠し操作で送話機能を表示すると、同じ画面にチャット入力欄も表示されます。選択中のDiscordサーバーに
-対応するWebhookへ、表示名`KikiWeb on Chat`で投稿します。Webhook URLはフロントへ設定せず、Renderの
-環境変数だけで管理してください。投稿時のDiscordメンションは無効です。
+接続しているKikiWeb Bot自身がVCチャットへ投稿します。サーバーごとのWebhook登録は不要です。投稿時の
+Discordメンションは無効です。Botに対象VCの「チャンネルを見る」と「メッセージを送信」権限を与えてください。
 
-1サーバーだけで使う場合は`DISCORD_CHAT_WEBHOOK_URL`へ投稿先テキストチャンネルのWebhook URLを設定します。
-複数サーバーでは`DISCORD_CHAT_WEBHOOK_URLS`へGuild IDとWebhook URLの対応を1行のJSONで設定します。
-
-```dotenv
-DISCORD_CHAT_WEBHOOK_URLS={"1209781281165152277":"https://discord.com/api/webhooks/ID/TOKEN","987654321098765432":"https://discord.com/api/webhooks/ID/TOKEN"}
-```
-
-サーバー別の設定が見つからない場合のみ`DISCORD_CHAT_WEBHOOK_URL`を共通の投稿先として使います。
 Botは接続中VCのチャットから最新25件と新着メッセージを受信します。Webには直近50件をメモリ上で表示し、
-サーバーのファイルやデータベースには保存しません。Webhook URLはWebからDiscordへの投稿だけに使用し、
-チャットの読み取り先には影響しません。
+サーバーのファイルやデータベースには保存しません。
 
-`KikiWeb on Chat`から投稿に成功した本文だけを、KikiWeb Botが接続中VCへ日本語で読み上げます。
-通常のDiscordメッセージや他のWebhook、読み上げBotの投稿は対象外です。Bot環境の`KIKIWEB_CHAT_TTS=false`で
+サイトの`KikiWeb on Chat`からBot投稿に成功した本文だけを、KikiWeb Botが接続中VCへ日本語で読み上げます。
+通常のDiscordメッセージや他のBot・Webhookの投稿は対象外です。Bot環境の`KIKIWEB_CHAT_TTS=false`で
 読み上げを無効化でき、`KIKIWEB_CHAT_TTS_VOICE`でedge-ttsの日本語音声を変更できます。
 
 Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。Botには接続先VCの
@@ -157,9 +148,7 @@ Render ではこのリポジトリの `render.yaml` を使えます。環境変�
 - `CLIENT_ORIGIN`: Vercel の URL。例: `https://your-app.vercel.app`
 - `INGEST_TOKEN`: Python Bot から relay へ音声を送るためのトークン
 - `LISTEN_TOKEN`: 任意。設定すると、この値を知っている人だけが聞けます。
-- `TALK_TOKEN`: Webマイク送話・Webhookチャット用。十分長いランダムな値を設定します。
-- `DISCORD_CHAT_WEBHOOK_URL`: 1サーバー運用時、またはサーバー別設定がない場合のDiscord Webhook URL
-- `DISCORD_CHAT_WEBHOOK_URLS`: 任意。Guild IDをキー、Discord Webhook URLを値にした1行のJSON
+- `TALK_TOKEN`: Webマイク送話・Botチャット用。十分長いランダムな値を設定します。
 
 Discord Bot の `DISCORD_TOKEN` は Render ではなく、既存 Python Bot を動かしている環境に設定してください。
 複数サーバーでも Render の `INGEST_TOKEN` と Bot の `KIKIWEB_INGEST_TOKEN` は同じ1組を使います。
@@ -170,7 +159,7 @@ Vercel の Project Root は `client` にしてください。
 
 - `VITE_API_BASE_URL`: Render の URL。例: `https://kikiweb-api.onrender.com`
 - `VITE_LISTEN_TOKEN`: Render 側で `LISTEN_TOKEN` を設定した場合のみ同じ値
-- `VITE_TALK_TOKEN`: Render 側の `TALK_TOKEN` と同じ値。マイク送話とWebhookチャットで使います。サイト内に埋め込まれるため、本格運用では別途ログイン機能を追加してください。
+- `VITE_TALK_TOKEN`: Render 側の `TALK_TOKEN` と同じ値。マイク送話とBotチャットで使います。サイト内に埋め込まれるため、本格運用では別途ログイン機能を追加してください。
 
 ## Google Chrome 拡張機能
 

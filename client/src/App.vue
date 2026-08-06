@@ -1619,7 +1619,7 @@ onBeforeUnmount(() => {
       <form class="chat-composer" @submit.prevent="sendChatMessage">
         <div class="chat-composer-heading">
           <div>
-            <span>Discord Webhook</span>
+            <span>Discord Bot</span>
             <strong>KikiWeb on Chat</strong>
           </div>
           <small>{{ chatMessage.length }} / 1000</small>
@@ -1670,7 +1670,7 @@ onBeforeUnmount(() => {
       <ol class="guide-steps">
         <li>
           <strong>VC権限を確認</strong>
-          <span>Botに「チャンネルを見る」「接続」「発言」「メッセージ履歴を読む」「ボイスチャンネルステータスを設定」権限を付けます。</span>
+          <span>Botに「チャンネルを見る」「接続」「発言」「メッセージを送信」「メッセージ履歴を読む」「ボイスチャンネルステータスを設定」権限を付けます。</span>
         </li>
         <li>
           <strong>チャット読み取りを許可</strong>
@@ -1737,7 +1737,7 @@ onBeforeUnmount(() => {
       <h2>うまく接続できない場合</h2>
       <ul class="guide-checks">
         <li>Botがオンラインで、対象VCに接続しているか確認します。</li>
-        <li>Botの「チャンネルを見る」「接続」「発言」「メッセージ履歴を読む」「ステータスを設定」権限を確認します。</li>
+        <li>Botの「チャンネルを見る」「接続」「発言」「メッセージを送信」「メッセージ履歴を読む」「ステータスを設定」権限を確認します。</li>
         <li>チャットが出ない場合はDeveloper Portalの「Message Content Intent」をONにしてBotを再起動します。</li>
         <li>スラッシュコマンドが出ない場合は、Botを再起動してコマンドツリーの同期を待ちます。</li>
         <li>サーバーメニューに出ない場合は「状態更新」を押します。</li>
@@ -1846,7 +1846,7 @@ onBeforeUnmount(() => {
 
       <h2>4. 認証情報の管理</h2>
       <p>
-        Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN、Discord Webhook URL、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
+        Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN、Render や Vercel の環境変数は利用者の責任で管理してください。これらの漏えいにより発生した損害について、サービス提供者は責任を負いません。
       </p>
 
       <h2>5. サービスの停止・変更</h2>
@@ -1877,7 +1877,7 @@ onBeforeUnmount(() => {
 
       <h2>2. 音声・チャットデータの扱い</h2>
       <p>
-        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で受信・入力したメッセージは、Web表示と指定されたDiscord Webhookへの送信のために処理され、直近50件のみRelayのメモリ上に一時保持されます。KikiWeb on ChatのVC読み上げが有効な場合、投稿本文は音声生成のためMicrosoftのオンライン音声合成サービスへ送信されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
+        ボイスチャンネルの音声と、利用者が送話ボタンを押した後にブラウザから取得するマイク音声は、Discord VCへリアルタイム中継するためにサーバー上で一時的に処理されます。チャット機能で受信・入力したメッセージは、Web表示とKikiWeb BotによるDiscordへの送信のために処理され、直近50件のみRelayのメモリ上に一時保持されます。KikiWeb on ChatのVC読み上げが有効な場合、投稿本文は音声生成のためMicrosoftのオンライン音声合成サービスへ送信されます。この実装では音声やメッセージをKikiWebのファイルまたはデータベースへ保存しません。Discordへ送信されたメッセージはDiscord上に保存されます。
       </p>
 
       <h2>3. 利用目的</h2>
@@ -1892,7 +1892,7 @@ onBeforeUnmount(() => {
 
       <h2>5. ログと環境変数</h2>
       <p>
-        サーバーログには接続状態やエラーが記録される場合があります。Discord Bot トークン、LISTEN_TOKEN、Discord Webhook URL などの秘密情報をログや公開リポジトリに含めないよう管理してください。
+        サーバーログには接続状態やエラーが記録される場合があります。Discord Bot トークン、LISTEN_TOKEN、TALK_TOKEN などの秘密情報をログや公開リポジトリに含めないよう管理してください。
       </p>
 
       <h2>6. 情報の共有</h2>

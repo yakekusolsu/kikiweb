@@ -18,7 +18,3 @@ services:
         sync: false
       - key: TALK_TOKEN
         sync: false
-      - key: DISCORD_CHAT_WEBHOOK_URL
-        sync: false
-      - key: DISCORD_CHAT_WEBHOOK_URLS
-        sync: false

@@ -31,6 +31,4 @@ export const config = {
   listenToken: process.env.LISTEN_TOKEN ?? '',
   ingestToken: process.env.INGEST_TOKEN ?? '',
   talkToken: process.env.TALK_TOKEN ?? '',
-  chatWebhookUrl: process.env.DISCORD_CHAT_WEBHOOK_URL ?? '',
-  chatWebhookUrls: process.env.DISCORD_CHAT_WEBHOOK_URLS ?? '',
 };

@@ -446,6 +446,15 @@ class KikiWebVoiceRelay:
             except asyncio.QueueEmpty:
                 break
 
+    def enqueue_chat_payload(self, payload: dict[str, object]) -> None:
+        if self.closed.is_set():
+            return
+        if self.chat_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self.chat_queue.get_nowait()
+                self.chat_queue.task_done()
+        self.chat_queue.put_nowait(payload)
+
     def enqueue_chat_message(self, message: discord.Message) -> None:
         if self.closed.is_set() or message.guild is None or message.guild.id != self.server_id:
             return
@@ -485,11 +494,55 @@ class KikiWebVoiceRelay:
             "content": content[:2_000],
             "timestamp": message.created_at.isoformat(),
         }
-        if self.chat_queue.full():
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self.chat_queue.get_nowait()
-                self.chat_queue.task_done()
-        self.chat_queue.put_nowait(payload)
+        self.enqueue_chat_payload(payload)
+
+    async def post_chat_message(self, payload: dict[str, object]) -> None:
+        request_id = str(payload.get("requestId", ""))[:100]
+        result: dict[str, object] = {
+            "type": "chat-post-result",
+            "requestId": request_id,
+            "ok": False,
+        }
+        try:
+            channel_id = int(payload.get("channelId", 0))
+            content = str(payload.get("content", "")).strip()
+            if len(request_id) < 8 or channel_id != self.chat_channel_id:
+                raise ValueError("The Discord chat request did not match the connected VC.")
+            if not content or len(content) > 1_000:
+                raise ValueError("The Discord chat message must be between 1 and 1000 characters.")
+            if not self.voice_client or not self.voice_client.is_connected():
+                raise RuntimeError("The Discord Bot is not connected to the VC.")
+
+            client = self.voice_client.client
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
+            if not isinstance(channel, discord.abc.Messageable):
+                raise RuntimeError("The connected VC does not support text messages.")
+
+            message = await channel.send(
+                content,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            self.enqueue_chat_message(message)
+            self.enqueue_chat_tts(content)
+            result["ok"] = True
+        except discord.Forbidden:
+            result["error"] = (
+                "Discord Bot cannot send messages in this VC. "
+                "Give it View Channel and Send Messages permissions."
+            )
+        except discord.NotFound:
+            result["error"] = "The connected Discord VC could not be found."
+        except discord.HTTPException:
+            LOGGER.exception("KikiWeb Bot could not send a VC chat message")
+            result["error"] = "Discord rejected the Bot message. Please try again."
+        except (TypeError, ValueError, RuntimeError) as error:
+            result["error"] = str(error)
+        except Exception:
+            LOGGER.exception("KikiWeb Bot chat posting failed")
+            result["error"] = "Discord Bot could not send the message."
+        self.enqueue_chat_payload(result)
 
     def _schedule_chat_history(self) -> None:
         if self.chat_history_task and not self.chat_history_task.done():
@@ -674,8 +727,12 @@ class KikiWebVoiceRelay:
                     payload = json.loads(message.data)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(payload, dict):
+                    continue
                 if payload.get("type") == "talk-stop":
                     self.stop_web_audio()
+                elif payload.get("type") == "chat-post":
+                    await self.post_chat_message(payload)
                 elif payload.get("type") == "chat-tts":
                     self.enqueue_chat_tts(payload.get("content"))
                 elif payload.get("type") == "chat-channel":

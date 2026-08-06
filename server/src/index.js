@@ -1,24 +1,20 @@
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { AudioMixer, CHANNELS, PCM_FRAME_BYTES, SAMPLE_RATE } from './audioMixer.js';
 import { appendChatMessage, normalizeDiscordChatMessage } from './chatMessages.js';
 import {
   CHAT_MAX_LENGTH,
-  createChatTtsMessage,
-  fetchDiscordWebhookMetadata,
+  createChatPostCommand,
   normalizeChatMessage,
-  parseChatWebhookUrls,
-  postDiscordChatMessage,
-  resolveChatWebhookUrl,
-} from './chatWebhook.js';
+} from './chatPost.js';
 import { config } from './config.js';
 
 const STREAM_VOICE = 0;
 const STREAM_SOUNDBOARD = 1;
 const streams = new Map();
-const chatWebhookUrls = parseChatWebhookUrls(config.chatWebhookUrls, config.chatWebhookUrl);
-const chatWebhookMetadata = new Map();
 const chatRateLimits = new Map();
+const pendingChatPosts = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
   response.setHeader('Access-Control-Allow-Origin', origin);
@@ -78,11 +74,6 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    const webhookUrl = resolveChatWebhookUrl(chatWebhookUrls, serverId);
-    if (!webhookUrl) {
-      sendJson(response, 503, { ok: false, error: 'No Discord webhook is configured for this server.' });
-      return;
-    }
     const rateLimitKey = `${clientAddress(request)}:${serverId}`;
     const retryAfterSeconds = chatRetryAfter(rateLimitKey);
     if (retryAfterSeconds > 0) {
@@ -91,41 +82,19 @@ const server = createServer(async (request, response) => {
       return;
     }
     try {
-      const metadata = await getChatWebhookMetadata(webhookUrl);
-      if (metadata.guildId !== serverId) {
-        sendJson(response, 409, { ok: false, error: 'The Discord webhook belongs to a different server.' });
-        return;
-      }
-    } catch (error) {
-      console.error('KikiWeb could not validate the Discord webhook:', error instanceof Error ? error.message : error);
-      sendJson(response, 502, { ok: false, error: 'The Discord webhook could not be validated.' });
-      return;
-    }
-
-    try {
-      const delivered = await postDiscordChatMessage(webhookUrl, content);
-      const deliveredChannelId = String(delivered?.channel_id ?? '');
-      const chatMessage = normalizeDiscordChatMessage(
-        {
-          type: 'chat-message',
-          id: delivered?.id,
-          channelId: deliveredChannelId,
-          channelName: stream.chatChannelName,
-          authorId: delivered?.author?.id,
-          authorName: delivered?.author?.username ?? 'KikiWeb on Chat',
-          bot: true,
-          webhook: true,
-          content: delivered?.content ?? content,
-          timestamp: delivered?.timestamp,
-        },
-        stream.chatChannelId,
-      );
-      if (chatMessage) publishChatMessage(stream, chatMessage);
-      requestChatTts(stream, delivered?.content ?? content);
+      await requestBotChatPost(stream, content);
       sendJson(response, 200, { ok: true });
     } catch (error) {
-      console.error('KikiWeb chat webhook failed:', error instanceof Error ? error.message : error);
-      sendJson(response, 502, { ok: false, error: 'Discord webhook delivery failed.' });
+      console.error('KikiWeb Bot chat post failed:', error instanceof Error ? error.message : error);
+      const timeout = error?.code === 'CHAT_POST_TIMEOUT';
+      sendJson(response, timeout ? 504 : 502, {
+        ok: false,
+        error: timeout
+          ? 'Discord Bot did not respond in time.'
+          : error instanceof Error
+            ? error.message
+            : 'Discord Bot could not send the message.',
+      });
     }
     return;
   }
@@ -277,21 +246,73 @@ const sendChatSnapshot = (client, stream) => {
 };
 
 const publishChatMessage = (stream, message) => {
+  const alreadyPublished = stream.chatMessages.some((candidate) => candidate.id === message.id);
   appendChatMessage(stream.chatMessages, message);
+  if (alreadyPublished) return;
   const payload = JSON.stringify({ type: 'chat-message', message });
   for (const client of stream.chatClients) {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
   }
 };
 
-const requestChatTts = (stream, content) => {
-  if (stream.ingestClient?.readyState !== WebSocket.OPEN) return;
-  const message = createChatTtsMessage(content);
-  if (!message) return;
-  try {
-    stream.ingestClient.send(JSON.stringify(message));
-  } catch (error) {
-    console.warn('KikiWeb could not request chat TTS:', error instanceof Error ? error.message : error);
+const requestBotChatPost = (stream, content) =>
+  new Promise((resolve, reject) => {
+    if (stream.ingestClient?.readyState !== WebSocket.OPEN) {
+      reject(new Error('The selected Discord Bot is not connected.'));
+      return;
+    }
+
+    const requestId = randomUUID();
+    const command = createChatPostCommand(requestId, stream.chatChannelId, content);
+    if (!command) {
+      reject(new Error('The Discord chat request is invalid.'));
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      pendingChatPosts.delete(requestId);
+      const error = new Error('Discord Bot did not respond in time.');
+      error.code = 'CHAT_POST_TIMEOUT';
+      reject(error);
+    }, 12_000);
+    pendingChatPosts.set(requestId, { stream, resolve, reject, timeout });
+
+    try {
+      stream.ingestClient.send(JSON.stringify(command));
+    } catch (error) {
+      clearTimeout(timeout);
+      pendingChatPosts.delete(requestId);
+      reject(error);
+    }
+  });
+
+const resolveBotChatPost = (stream, payload) => {
+  const requestId = String(payload?.requestId ?? '');
+  const pending = pendingChatPosts.get(requestId);
+  if (!pending || pending.stream !== stream) return;
+
+  clearTimeout(pending.timeout);
+  pendingChatPosts.delete(requestId);
+  if (payload.ok === true) {
+    pending.resolve();
+    return;
+  }
+  pending.reject(
+    new Error(
+      safeLabel(
+        payload.error,
+        'Discord Bot could not send the message. Check its View Channel and Send Messages permissions.',
+      ),
+    ),
+  );
+};
+
+const rejectBotChatPosts = (stream, reason) => {
+  for (const [requestId, pending] of pendingChatPosts) {
+    if (pending.stream !== stream) continue;
+    clearTimeout(pending.timeout);
+    pendingChatPosts.delete(requestId);
+    pending.reject(new Error(reason));
   }
 };
 
@@ -306,15 +327,6 @@ const setStreamChatChannel = (stream, channelId, channelName = '') => {
     stream.ingestClient.send(JSON.stringify({ type: 'chat-channel', channelId }));
   }
   for (const client of stream.chatClients) sendChatSnapshot(client, stream);
-};
-
-const getChatWebhookMetadata = async (webhookUrl) => {
-  let metadata = chatWebhookMetadata.get(webhookUrl);
-  if (!metadata) {
-    metadata = await fetchDiscordWebhookMetadata(webhookUrl);
-    chatWebhookMetadata.set(webhookUrl, metadata);
-  }
-  return metadata;
 };
 
 const configureStreamChatChannel = async (stream) => {
@@ -466,6 +478,7 @@ wss.on('connection', (ws, _request, url) => {
     }
 
     if (stream.ingestClient) {
+      rejectBotChatPosts(stream, 'The Discord Bot connection was replaced. Please try again.');
       stream.ingestClient.close(1012, 'Another ingest client connected for this server.');
     }
 
@@ -494,6 +507,8 @@ wss.on('connection', (ws, _request, url) => {
               stream.chatChannelName = chatMessage.channelName;
               publishChatMessage(stream, chatMessage);
             }
+          } else if (payload.type === 'chat-post-result') {
+            resolveBotChatPost(stream, payload);
           }
         } catch {
           // Ignore malformed status messages while keeping the audio stream alive.
@@ -532,6 +547,7 @@ wss.on('connection', (ws, _request, url) => {
     });
     ws.on('close', () => {
       if (stream.ingestClient === ws) {
+        rejectBotChatPosts(stream, 'The Discord Bot disconnected before sending the message.');
         stream.ingestClient = null;
         stream.mixer.clearInputs();
         stream.soundboardMixer.clearInputs();
