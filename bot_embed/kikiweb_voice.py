@@ -76,6 +76,7 @@ class KikiWebConfig:
     listen_restart_delay: float = 1.0
     listen_watchdog_interval: float = 5.0
     listen_inactivity_timeout: float = 90.0
+    relay_connection_max_age: float = 5.5 * 60 * 60
     status_interval: float = 1.0
     queue_size: int = 160
     chat_tts_enabled: bool = True
@@ -288,11 +289,7 @@ class KikiWebVoiceRelay:
         if metadata_changed and self.socket and not self.socket.closed:
             await self.socket.close(code=1012, message=b"Voice stream changed")
 
-        if not self.sender_task or self.sender_task.done():
-            self.sender_task = asyncio.create_task(
-                self._sender_loop(),
-                name=f"kikiweb-audio-sender-{channel.guild.id}",
-            )
+        self._ensure_sender_task()
 
         voice_client = channel.guild.voice_client
         if voice_client and (
@@ -396,6 +393,26 @@ class KikiWebVoiceRelay:
 
     def note_voice_packet(self) -> None:
         self.last_voice_packet_at = time.monotonic()
+
+    def _ensure_sender_task(self) -> None:
+        if self.closed.is_set() or not self.loop:
+            return
+        if self.sender_task and not self.sender_task.done():
+            return
+
+        if self.sender_task and not self.sender_task.cancelled():
+            with contextlib.suppress(asyncio.CancelledError):
+                error = self.sender_task.exception()
+                if error is not None:
+                    LOGGER.error(
+                        "KikiWeb relay sender stopped unexpectedly; restarting it.",
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+
+        self.sender_task = asyncio.create_task(
+            self._sender_loop(),
+            name=f"kikiweb-audio-sender-{self.server_id}",
+        )
 
     def enqueue_pcm(
         self,
@@ -915,6 +932,7 @@ class KikiWebVoiceRelay:
     async def _listen_watchdog(self) -> None:
         while not self.closed.is_set():
             await asyncio.sleep(self.config.listen_watchdog_interval)
+            self._ensure_sender_task()
             if self.closed.is_set() or not self.voice_client or not self.voice_client.is_connected():
                 continue
 
@@ -964,10 +982,32 @@ class KikiWebVoiceRelay:
                         name=f"kikiweb-browser-mic-{self.server_id}",
                     )
                     LOGGER.info("KikiWeb relay connected")
+                    connected_at = time.monotonic()
                     next_status_at = 0.0
+                    scheduled_refresh = False
 
                     while not self.closed.is_set() and not socket.closed:
+                        if self.incoming_task.done():
+                            incoming_error = None
+                            if not self.incoming_task.cancelled():
+                                incoming_error = self.incoming_task.exception()
+                            if incoming_error is not None:
+                                raise aiohttp.ClientConnectionError(
+                                    f"KikiWeb relay receive loop stopped: {incoming_error}"
+                                ) from incoming_error
+                            LOGGER.warning("KikiWeb relay receive loop ended; reconnecting.")
+                            break
+
                         now = time.monotonic()
+                        if now - connected_at >= self.config.relay_connection_max_age:
+                            scheduled_refresh = True
+                            LOGGER.info(
+                                "Refreshing the long-lived KikiWeb relay connection after %.1f hours.",
+                                (now - connected_at) / 3600,
+                            )
+                            await socket.close(code=1000, message=b"Scheduled relay refresh")
+                            break
+
                         if now >= next_status_at:
                             await socket.send_json(self._voice_status())
                             next_status_at = now + self.config.status_interval
@@ -988,7 +1028,9 @@ class KikiWebVoiceRelay:
                         finally:
                             self.queue.task_done()
 
-                    if not self.closed.is_set():
+                    if scheduled_refresh and not self.closed.is_set():
+                        await asyncio.sleep(min(1.0, self.config.reconnect_delay))
+                    elif not self.closed.is_set():
                         LOGGER.warning(
                             "KikiWeb relay disconnected: code=%s, reason=%s",
                             socket.close_code,
@@ -1005,12 +1047,22 @@ class KikiWebVoiceRelay:
                 LOGGER.exception("KikiWeb relay connection failed")
                 await asyncio.sleep(self.config.reconnect_delay)
             finally:
-                if self.incoming_task:
-                    self.incoming_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await self.incoming_task
+                incoming_task = self.incoming_task
                 self.incoming_task = None
+                if incoming_task:
+                    incoming_task.cancel()
+                    results = await asyncio.gather(incoming_task, return_exceptions=True)
+                    for result in results:
+                        if isinstance(result, Exception) and not isinstance(
+                            result,
+                            aiohttp.ClientConnectionError,
+                        ):
+                            LOGGER.debug(
+                                "KikiWeb relay receive task ended during cleanup: %s",
+                                result,
+                            )
                 self.stop_web_audio()
+                self.clear_audio_queue()
                 self.socket = None
 
 

@@ -65,6 +65,8 @@ async def setup_hook():
 `/kikiweb_auto enabled:true channel:<VC>`で指定VCへの自動参加を保存し、Bot起動時や切断後にも再接続します。
 `/kikiweb_auto enabled:false`で自動参加を解除できます。設定変更にはサーバー管理権限が必要です。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
+RelayのWebSocketが長時間接続中に切断された場合は自動再接続します。送受信タスクが予期せず終了した場合も
+Bot側の監視処理が再起動します。また、接続は5時間30分ごとに予防的に張り直すため、通常はVCへ入り直す必要はありません。
 
 ### KikiWeb 専用 Bot
 
