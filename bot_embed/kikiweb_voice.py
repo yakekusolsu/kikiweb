@@ -109,6 +109,7 @@ class KikiWebConfig:
 class KikiWebDAVEAudioReader(AudioReader):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.relay = getattr(args[0], "relay", None) if args else None
         self._transport_decrypt_rtp = self.decryptor.decrypt_rtp
         self._last_packet_error_log_at = 0.0
         self.decryptor.decrypt_rtp = self._decrypt_rtp
@@ -141,6 +142,8 @@ class KikiWebDAVEAudioReader(AudioReader):
         try:
             return dave_session.decrypt(user_id, davey.MediaType.audio, payload)
         except Exception as error:
+            if self.relay is not None:
+                self.relay.note_dave_decrypt_failure(user_id)
             self._log_packet_error("KikiWeb dropped a DAVE packet that could not be decrypted: %s", error)
             return OPUS_SILENCE
 
@@ -257,7 +260,11 @@ class KikiWebVoiceRelay:
         self.chat_tts_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_task: Optional[asyncio.Task[None]] = None
         self.listen_watchdog_task: Optional[asyncio.Task[None]] = None
+        self.dave_reconnect_task: Optional[asyncio.Task[None]] = None
         self.listen_restart_lock = asyncio.Lock()
+        self.voice_connect_lock = asyncio.Lock()
+        self.dave_failures: dict[int, tuple[int, float, float]] = {}
+        self.dave_reconnect_cooldown_until = 0.0
         self.ignore_next_after = False
         self.last_voice_packet_at = time.monotonic()
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -272,6 +279,13 @@ class KikiWebVoiceRelay:
         self.chat_tts_playing = False
 
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
+        async with self.voice_connect_lock:
+            await self._connect_unlocked(channel)
+
+    async def _connect_unlocked(
+        self,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
         metadata_changed = self.server_id != channel.guild.id or self.channel_id != channel.id
@@ -334,6 +348,11 @@ class KikiWebVoiceRelay:
     async def disconnect(self) -> None:
         self.closed.set()
 
+        if self.dave_reconnect_task and self.dave_reconnect_task is not asyncio.current_task():
+            self.dave_reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.dave_reconnect_task
+
         if self.voice_client and self.voice_client.is_listening():
             self.voice_client.stop_listening()
 
@@ -386,6 +405,8 @@ class KikiWebVoiceRelay:
         self.incoming_task = None
         self.chat_history_task = None
         self.chat_tts_task = None
+        self.dave_reconnect_task = None
+        self.dave_failures.clear()
         self.stop_web_audio()
         self.clear_audio_queue()
         self.clear_chat_queue()
@@ -393,6 +414,75 @@ class KikiWebVoiceRelay:
 
     def note_voice_packet(self) -> None:
         self.last_voice_packet_at = time.monotonic()
+
+    def note_dave_decrypt_failure(self, user_id: int) -> None:
+        if not self.loop or self.closed.is_set():
+            return
+        self.loop.call_soon_threadsafe(self._record_dave_decrypt_failure, int(user_id))
+
+    def _record_dave_decrypt_failure(self, user_id: int) -> None:
+        if self.closed.is_set():
+            return
+
+        now = time.monotonic()
+        count, first_at, last_at = self.dave_failures.get(user_id, (0, now, now))
+        if now - last_at > 1.0:
+            count, first_at = 0, now
+        count += 1
+        self.dave_failures[user_id] = (count, first_at, now)
+
+        sustained = count >= 20 and now - first_at >= 2.0
+        reconnect_running = self.dave_reconnect_task and not self.dave_reconnect_task.done()
+        if not sustained or reconnect_running or now < self.dave_reconnect_cooldown_until:
+            return
+
+        self.dave_reconnect_cooldown_until = now + 60.0
+        self.dave_failures.clear()
+        self.dave_reconnect_task = asyncio.create_task(
+            self._recover_dave_session(user_id),
+            name=f"kikiweb-dave-reconnect-{self.server_id}",
+        )
+
+    async def _recover_dave_session(self, user_id: int) -> None:
+        voice_client = self.voice_client
+        channel = getattr(voice_client, "channel", None)
+        if self.closed.is_set() or voice_client is None or channel is None:
+            return
+
+        LOGGER.warning(
+            "KikiWeb detected sustained DAVE decrypt failures for user %s; reconnecting voice to resync keys.",
+            user_id,
+        )
+        try:
+            async with self.voice_connect_lock:
+                if self.closed.is_set():
+                    return
+                if (
+                    self.voice_client is not voice_client
+                    or getattr(voice_client.channel, "id", None) != getattr(channel, "id", None)
+                ):
+                    return
+                if self.listen_restart_task and not self.listen_restart_task.done():
+                    self.listen_restart_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self.listen_restart_task
+                if voice_client.is_listening():
+                    self.ignore_next_after = True
+                    voice_client.stop_listening()
+                if voice_client.is_connected():
+                    await voice_client.disconnect(force=True)
+                self.voice_client = None
+                await asyncio.sleep(0.5)
+                if self.closed.is_set():
+                    return
+                await self._connect_unlocked(channel)
+            LOGGER.info("KikiWeb DAVE session resynchronized.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("KikiWeb could not resynchronize the DAVE session")
+        finally:
+            self.dave_failures.clear()
 
     def _ensure_sender_task(self) -> None:
         if self.closed.is_set() or not self.loop:
