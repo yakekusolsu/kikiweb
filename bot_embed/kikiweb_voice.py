@@ -55,6 +55,8 @@ STREAM_SOUNDBOARD = 1
 MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
+JAPANESE_TEXT_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]")
+LATIN_TEXT_PATTERN = re.compile(r"[A-Za-z]")
 CHAT_URL_PATTERN = re.compile(
     r"(?:\b(?:https?|ftp)://|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+"
     r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#]\S*)?|"
@@ -65,6 +67,15 @@ CHAT_URL_PATTERN = re.compile(
 
 def contains_chat_url(value: str) -> bool:
     return CHAT_URL_PATTERN.search(unicodedata.normalize("NFKC", value)) is not None
+
+
+def chat_tts_language(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    if JAPANESE_TEXT_PATTERN.search(normalized):
+        return "ja"
+    if LATIN_TEXT_PATTERN.search(normalized):
+        return "en"
+    return "ja"
 
 
 @dataclass(slots=True)
@@ -81,6 +92,7 @@ class KikiWebConfig:
     queue_size: int = 160
     chat_tts_enabled: bool = True
     chat_tts_voice: str = "ja-JP-NanamiNeural"
+    chat_tts_english_voice: str = "en-US-AriaNeural"
 
     def websocket_url(
         self,
@@ -751,10 +763,16 @@ class KikiWebVoiceRelay:
         if not self.voice_client or not self.voice_client.is_connected():
             return
 
+        language = chat_tts_language(text)
+        voice = (
+            self.config.chat_tts_english_voice
+            if language == "en"
+            else self.config.chat_tts_voice
+        )
         audio_data = bytearray()
         communicator = edge_tts.Communicate(
             text,
-            self.config.chat_tts_voice,
+            voice,
             rate="+5%",
             volume="+15%",
         )
@@ -1301,6 +1319,7 @@ def install_kikiweb_commands(
     voice_status: str = "試聴完全自由！",
     chat_tts_enabled: bool = True,
     chat_tts_voice: str = "ja-JP-NanamiNeural",
+    chat_tts_english_voice: str = "en-US-AriaNeural",
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = True,
     auto_join_path: str | Path = "kikiweb_auto_join.json",
@@ -1312,6 +1331,7 @@ def install_kikiweb_commands(
             voice_status=voice_status,
             chat_tts_enabled=chat_tts_enabled,
             chat_tts_voice=chat_tts_voice,
+            chat_tts_english_voice=chat_tts_english_voice,
         ),
         auto_join_path=auto_join_path,
     )

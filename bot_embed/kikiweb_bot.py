@@ -49,6 +49,10 @@ chat_tts_enabled = os.getenv("KIKIWEB_CHAT_TTS", "true").strip().lower() not in 
     "off",
 }
 chat_tts_voice = os.getenv("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural")
+chat_tts_english_voice = os.getenv(
+    "KIKIWEB_CHAT_TTS_ENGLISH_VOICE",
+    "en-US-AriaNeural",
+)
 auto_join_file = os.getenv("KIKIWEB_AUTO_JOIN_FILE", "/home/container/kikiweb_auto_join.json")
 
 if not discord_token:
@@ -67,6 +71,7 @@ install_kikiweb_commands(
     voice_status=site_status,
     chat_tts_enabled=chat_tts_enabled,
     chat_tts_voice=chat_tts_voice,
+    chat_tts_english_voice=chat_tts_english_voice,
     use_slash_commands=True,
     auto_join_path=auto_join_file,
 )

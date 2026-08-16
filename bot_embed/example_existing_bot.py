@@ -21,6 +21,10 @@ install_kikiweb_commands(
     ),
     chat_tts_enabled=os.environ.get("KIKIWEB_CHAT_TTS", "true").lower() not in {"0", "false", "no", "off"},
     chat_tts_voice=os.environ.get("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural"),
+    chat_tts_english_voice=os.environ.get(
+        "KIKIWEB_CHAT_TTS_ENGLISH_VOICE",
+        "en-US-AriaNeural",
+    ),
     use_slash_commands=True,
     auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
 )
