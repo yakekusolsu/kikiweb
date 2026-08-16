@@ -4,3 +4,4 @@ davey>=0.1.6,<0.2
 aiohttp>=3.9
 imageio-ffmpeg>=0.6,<0.7
 edge-tts>=7.0,<8.0
+langdetect>=1.0.9,<2.0

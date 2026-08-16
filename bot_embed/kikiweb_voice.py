@@ -30,6 +30,15 @@ try:
 except ImportError:
     edge_tts = None
 
+try:
+    from langdetect import DetectorFactory, detect_langs
+    from langdetect.lang_detect_exception import LangDetectException
+
+    DetectorFactory.seed = 0
+except ImportError:
+    detect_langs = None
+    LangDetectException = ValueError
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -55,8 +64,86 @@ STREAM_SOUNDBOARD = 1
 MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
-JAPANESE_TEXT_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]")
+JAPANESE_KANA_PATTERN = re.compile(r"[\u3040-\u30ff\uff66-\uff9f]")
+HANGUL_TEXT_PATTERN = re.compile(r"[\uac00-\ud7af]")
+HAN_TEXT_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+ARABIC_TEXT_PATTERN = re.compile(r"[\u0600-\u06ff]")
+CYRILLIC_TEXT_PATTERN = re.compile(r"[\u0400-\u04ff]")
+DEVANAGARI_TEXT_PATTERN = re.compile(r"[\u0900-\u097f]")
+GREEK_TEXT_PATTERN = re.compile(r"[\u0370-\u03ff]")
+HEBREW_TEXT_PATTERN = re.compile(r"[\u0590-\u05ff]")
+THAI_TEXT_PATTERN = re.compile(r"[\u0e00-\u0e7f]")
 LATIN_TEXT_PATTERN = re.compile(r"[A-Za-z]")
+ENGLISH_HINT_PATTERN = re.compile(
+    r"\b(?:hello|thanks|thank\s+you|please|good\s+(?:morning|afternoon|evening))\b",
+    re.IGNORECASE,
+)
+FALLBACK_SCRIPT_LANGUAGES = (
+    (HANGUL_TEXT_PATTERN, "ko"),
+    (HAN_TEXT_PATTERN, "zh-cn"),
+    (ARABIC_TEXT_PATTERN, "ar"),
+    (CYRILLIC_TEXT_PATTERN, "ru"),
+    (DEVANAGARI_TEXT_PATTERN, "hi"),
+    (GREEK_TEXT_PATTERN, "el"),
+    (HEBREW_TEXT_PATTERN, "he"),
+    (THAI_TEXT_PATTERN, "th"),
+    (LATIN_TEXT_PATTERN, "en"),
+)
+EDGE_TTS_LOCALE_PREFERENCES = {
+    "af": "af-ZA",
+    "ar": "ar-EG",
+    "bg": "bg-BG",
+    "bn": "bn-BD",
+    "ca": "ca-ES",
+    "cs": "cs-CZ",
+    "cy": "cy-GB",
+    "da": "da-DK",
+    "de": "de-DE",
+    "el": "el-GR",
+    "es": "es-ES",
+    "et": "et-EE",
+    "fa": "fa-IR",
+    "fi": "fi-FI",
+    "fr": "fr-FR",
+    "gu": "gu-IN",
+    "he": "he-IL",
+    "hi": "hi-IN",
+    "hr": "hr-HR",
+    "hu": "hu-HU",
+    "id": "id-ID",
+    "it": "it-IT",
+    "kn": "kn-IN",
+    "ko": "ko-KR",
+    "lt": "lt-LT",
+    "lv": "lv-LV",
+    "mk": "mk-MK",
+    "ml": "ml-IN",
+    "mr": "mr-IN",
+    "ne": "ne-NP",
+    "nl": "nl-NL",
+    "no": "nb-NO",
+    "pa": "hi-IN",
+    "pl": "pl-PL",
+    "pt": "pt-BR",
+    "ro": "ro-RO",
+    "ru": "ru-RU",
+    "sk": "sk-SK",
+    "sl": "sl-SI",
+    "so": "so-SO",
+    "sq": "sq-AL",
+    "sv": "sv-SE",
+    "sw": "sw-KE",
+    "ta": "ta-IN",
+    "te": "te-IN",
+    "th": "th-TH",
+    "tl": "fil-PH",
+    "tr": "tr-TR",
+    "uk": "uk-UA",
+    "ur": "ur-PK",
+    "vi": "vi-VN",
+    "zh-cn": "zh-CN",
+    "zh-tw": "zh-TW",
+}
 CHAT_URL_PATTERN = re.compile(
     r"(?:\b(?:https?|ftp)://|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+"
     r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#]\S*)?|"
@@ -71,10 +158,29 @@ def contains_chat_url(value: str) -> bool:
 
 def chat_tts_language(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
-    if JAPANESE_TEXT_PATTERN.search(normalized):
+    if JAPANESE_KANA_PATTERN.search(normalized):
         return "ja"
-    if LATIN_TEXT_PATTERN.search(normalized):
+    if ENGLISH_HINT_PATTERN.search(normalized):
         return "en"
+
+    if detect_langs is not None:
+        try:
+            candidates = detect_langs(normalized)
+            if candidates and candidates[0].prob >= 0.45:
+                language = candidates[0].lang.lower()
+                if HAN_TEXT_PATTERN.search(normalized) and language not in {
+                    "ja",
+                    "zh-cn",
+                    "zh-tw",
+                }:
+                    return "ja"
+                return language
+        except LangDetectException:
+            pass
+
+    for pattern, language in FALLBACK_SCRIPT_LANGUAGES:
+        if pattern.search(normalized):
+            return language
     return "ja"
 
 
@@ -289,6 +395,11 @@ class KikiWebVoiceRelay:
         self.web_audio_source = KikiWebWebAudioSource()
         self.browser_audio_active = False
         self.chat_tts_playing = False
+        self.chat_tts_voice_cache: dict[str, str] = {
+            "ja": config.chat_tts_voice,
+            "en": config.chat_tts_english_voice,
+        }
+        self.chat_tts_voices: Optional[list[dict[str, object]]] = None
 
     async def connect(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         async with self.voice_connect_lock:
@@ -764,11 +875,7 @@ class KikiWebVoiceRelay:
             return
 
         language = chat_tts_language(text)
-        voice = (
-            self.config.chat_tts_english_voice
-            if language == "en"
-            else self.config.chat_tts_voice
-        )
+        voice = await self._chat_tts_voice(language)
         audio_data = bytearray()
         communicator = edge_tts.Communicate(
             text,
@@ -839,6 +946,49 @@ class KikiWebVoiceRelay:
                 self.web_audio_source.clear()
                 if self.voice_client and self.voice_client.is_playing():
                     self.voice_client.stop()
+
+    async def _chat_tts_voice(self, language: str) -> str:
+        cached_voice = self.chat_tts_voice_cache.get(language)
+        if cached_voice:
+            return cached_voice
+
+        try:
+            if self.chat_tts_voices is None:
+                self.chat_tts_voices = await asyncio.wait_for(
+                    edge_tts.list_voices(),
+                    timeout=10,
+                )
+            preferred_locale = EDGE_TTS_LOCALE_PREFERENCES.get(language, language)
+            preferred_base = preferred_locale.split("-", 1)[0].lower()
+            candidates = [
+                voice
+                for voice in self.chat_tts_voices
+                if str(voice.get("Locale", "")).lower() == preferred_locale.lower()
+                or str(voice.get("Locale", "")).split("-", 1)[0].lower()
+                == preferred_base
+            ]
+            candidates.sort(
+                key=lambda voice: (
+                    str(voice.get("Locale", "")).lower()
+                    != preferred_locale.lower(),
+                    str(voice.get("Gender", "")).lower() != "female",
+                    str(voice.get("ShortName", "")),
+                )
+            )
+            if candidates:
+                selected_voice = str(candidates[0].get("ShortName", ""))
+                if selected_voice:
+                    self.chat_tts_voice_cache[language] = selected_voice
+                    return selected_voice
+        except Exception:
+            LOGGER.warning(
+                "KikiWeb could not select a TTS voice for language %s; using English.",
+                language,
+                exc_info=True,
+            )
+
+        self.chat_tts_voice_cache[language] = self.config.chat_tts_english_voice
+        return self.config.chat_tts_english_voice
 
     async def _incoming_loop(self, socket: aiohttp.ClientWebSocketResponse) -> None:
         async for message in socket:
