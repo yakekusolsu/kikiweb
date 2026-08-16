@@ -144,6 +144,19 @@ EDGE_TTS_LOCALE_PREFERENCES = {
     "zh-cn": "zh-CN",
     "zh-tw": "zh-TW",
 }
+EDGE_TTS_NATURAL_VOICE_PREFERENCES = {
+    "ar": "ar-EG-SalmaNeural",
+    "de": "de-DE-SeraphinaMultilingualNeural",
+    "es": "es-ES-XimenaNeural",
+    "fr": "fr-FR-VivienneMultilingualNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "it": "it-IT-GiuseppeMultilingualNeural",
+    "ko": "ko-KR-HyunsuMultilingualNeural",
+    "pt": "pt-BR-ThalitaMultilingualNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "zh-cn": "zh-CN-XiaoxiaoNeural",
+    "zh-tw": "zh-TW-HsiaoChenNeural",
+}
 CHAT_URL_PATTERN = re.compile(
     r"(?:\b(?:https?|ftp)://|\bwww\.|(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+"
     r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?:[/:?#]\S*)?|"
@@ -198,7 +211,7 @@ class KikiWebConfig:
     queue_size: int = 160
     chat_tts_enabled: bool = True
     chat_tts_voice: str = "ja-JP-NanamiNeural"
-    chat_tts_english_voice: str = "en-US-AriaNeural"
+    chat_tts_english_voice: str = "en-US-AvaMultilingualNeural"
 
     def websocket_url(
         self,
@@ -880,7 +893,7 @@ class KikiWebVoiceRelay:
         communicator = edge_tts.Communicate(
             text,
             voice,
-            rate="+5%",
+            rate="+0%",
             volume="+15%",
         )
         async for chunk in communicator.stream():
@@ -959,6 +972,7 @@ class KikiWebVoiceRelay:
                     timeout=10,
                 )
             preferred_locale = EDGE_TTS_LOCALE_PREFERENCES.get(language, language)
+            preferred_voice = EDGE_TTS_NATURAL_VOICE_PREFERENCES.get(language, "")
             preferred_base = preferred_locale.split("-", 1)[0].lower()
             candidates = [
                 voice
@@ -969,8 +983,19 @@ class KikiWebVoiceRelay:
             ]
             candidates.sort(
                 key=lambda voice: (
+                    str(voice.get("ShortName", "")) != preferred_voice,
                     str(voice.get("Locale", "")).lower()
                     != preferred_locale.lower(),
+                    "conversation"
+                    not in {
+                        str(category).lower()
+                        for category in voice.get("VoiceTag", {}).get(
+                            "ContentCategories",
+                            [],
+                        )
+                    },
+                    "multilingualneural"
+                    not in str(voice.get("ShortName", "")).lower(),
                     str(voice.get("Gender", "")).lower() != "female",
                     str(voice.get("ShortName", "")),
                 )
@@ -1469,7 +1494,7 @@ def install_kikiweb_commands(
     voice_status: str = "試聴完全自由！",
     chat_tts_enabled: bool = True,
     chat_tts_voice: str = "ja-JP-NanamiNeural",
-    chat_tts_english_voice: str = "en-US-AriaNeural",
+    chat_tts_english_voice: str = "en-US-AvaMultilingualNeural",
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = True,
     auto_join_path: str | Path = "kikiweb_auto_join.json",

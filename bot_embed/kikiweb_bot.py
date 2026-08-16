@@ -51,7 +51,7 @@ chat_tts_enabled = os.getenv("KIKIWEB_CHAT_TTS", "true").strip().lower() not in 
 chat_tts_voice = os.getenv("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural")
 chat_tts_english_voice = os.getenv(
     "KIKIWEB_CHAT_TTS_ENGLISH_VOICE",
-    "en-US-AriaNeural",
+    "en-US-AvaMultilingualNeural",
 )
 auto_join_file = os.getenv("KIKIWEB_AUTO_JOIN_FILE", "/home/container/kikiweb_auto_join.json")
 

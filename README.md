@@ -52,7 +52,7 @@ install_kikiweb_commands(
     ingest_token=os.environ.get("KIKIWEB_INGEST_TOKEN", ""),
     chat_tts_enabled=os.environ.get("KIKIWEB_CHAT_TTS", "true").lower() not in {"0", "false", "no", "off"},
     chat_tts_voice=os.environ.get("KIKIWEB_CHAT_TTS_VOICE", "ja-JP-NanamiNeural"),
-    chat_tts_english_voice=os.environ.get("KIKIWEB_CHAT_TTS_ENGLISH_VOICE", "en-US-AriaNeural"),
+    chat_tts_english_voice=os.environ.get("KIKIWEB_CHAT_TTS_ENGLISH_VOICE", "en-US-AvaMultilingualNeural"),
     use_slash_commands=True,
     auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
 )
@@ -82,7 +82,7 @@ KIKIWEB_INGEST_TOKEN=Render の INGEST_TOKEN と同じ値
 KIKIWEB_SITE_STATUS=試聴完全自由！
 KIKIWEB_CHAT_TTS=true
 KIKIWEB_CHAT_TTS_VOICE=ja-JP-NanamiNeural
-KIKIWEB_CHAT_TTS_ENGLISH_VOICE=en-US-AriaNeural
+KIKIWEB_CHAT_TTS_ENGLISH_VOICE=en-US-AvaMultilingualNeural
 KIKIWEB_AUTO_JOIN_FILE=/home/container/kikiweb_auto_join.json
 DISCORD_GUILD_ID=コマンドをすぐ反映したいサーバーID
 ```
@@ -145,7 +145,7 @@ Discordに表示する`ログイン済みユーザー名 >>`の部分は読み�
 読み上げを無効化できます。日本語を含む文章は`KIKIWEB_CHAT_TTS_VOICE`、英語の文章は
 `KIKIWEB_CHAT_TTS_ENGLISH_VOICE`のedge-tts音声を使用します。それ以外の言語は自動判定し、
 その言語に合う音声を選択します。専用音声がない言語は近い地域の音声か英語音声を使用します。
-数字・記号だけの文章は日本語音声になります。
+主要言語では会話向け・Multilingual音声を優先します。数字・記号だけの文章は日本語音声になります。
 
 Discord Developer PortalのBot設定で`Message Content Intent`をONにしてください。Botには接続先VCの
 「チャンネルを見る」と「メッセージ履歴を読む」権限も必要です。既存Botへ組み込む場合は、Bot生成時の
