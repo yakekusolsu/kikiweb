@@ -11,8 +11,15 @@ export const normalizeChatMessage = (value) => {
 export const containsChatUrl = (value) =>
   typeof value === 'string' && CHAT_URL_PATTERN.test(value.normalize('NFKC'));
 
-export const createChatPostCommand = (requestId, channelId, value, authorName = '') => {
+export const createChatPostCommand = (
+  requestId,
+  channelId,
+  value,
+  authorId = '',
+  authorName = '',
+) => {
   const content = normalizeChatMessage(value);
+  const normalizedAuthorId = String(authorId ?? '');
   const normalizedAuthorName = String(authorName ?? '')
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
@@ -23,6 +30,7 @@ export const createChatPostCommand = (requestId, channelId, value, authorName = 
     requestId.length < 8 ||
     requestId.length > 100 ||
     !/^\d{1,20}$/.test(String(channelId)) ||
+    (normalizedAuthorId && !/^\d{1,20}$/.test(normalizedAuthorId)) ||
     !content ||
     containsChatUrl(content)
   ) {
@@ -34,6 +42,7 @@ export const createChatPostCommand = (requestId, channelId, value, authorName = 
     channelId: String(channelId),
     content,
     ttsContent: content,
+    ...(normalizedAuthorId ? { authorId: normalizedAuthorId } : {}),
     ...(normalizedAuthorName ? { authorName: normalizedAuthorName } : {}),
   };
 };

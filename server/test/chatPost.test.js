@@ -33,6 +33,7 @@ test('creates a command for the connected Discord Bot', () => {
       'request-123',
       '1234567890',
       ' KikiWebからこんにちは ',
+      '300',
       ' Login\n User ',
     ),
     {
@@ -41,10 +42,12 @@ test('creates a command for the connected Discord Bot', () => {
       channelId: '1234567890',
       content: 'KikiWebからこんにちは',
       ttsContent: 'KikiWebからこんにちは',
+      authorId: '300',
       authorName: 'Login User',
     },
   );
   assert.equal(createChatPostCommand('short', '1234567890', 'hello'), null);
   assert.equal(createChatPostCommand('request-123', 'invalid', 'hello'), null);
+  assert.equal(createChatPostCommand('request-123', '1234567890', 'hello', 'invalid'), null);
   assert.equal(createChatPostCommand('request-123', '1234567890', 'https://example.com'), null);
 });

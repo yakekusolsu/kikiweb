@@ -385,6 +385,11 @@ class KikiWebVoiceRelay:
         self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=config.queue_size)
         self.chat_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=100)
         self.chat_tts_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=20)
+        self.chat_users: dict[str, str] = {}
+        self.chat_timeout_requests: dict[
+            str,
+            asyncio.Future[dict[str, object]],
+        ] = {}
         self.sender_task: Optional[asyncio.Task[None]] = None
         self.incoming_task: Optional[asyncio.Task[None]] = None
         self.chat_history_task: Optional[asyncio.Task[None]] = None
@@ -736,6 +741,7 @@ class KikiWebVoiceRelay:
         try:
             channel_id = int(payload.get("channelId", 0))
             content = str(payload.get("content", "")).strip()
+            author_id = str(payload.get("authorId", ""))
             author_name = " ".join(str(payload.get("authorName", "")).split())[:32]
             tts_content = str(payload.get("ttsContent", content)).strip()
             if len(request_id) < 8 or channel_id != self.chat_channel_id:
@@ -746,6 +752,10 @@ class KikiWebVoiceRelay:
                 raise ValueError("URLを含むメッセージは送信できません。")
             if not self.voice_client or not self.voice_client.is_connected():
                 raise RuntimeError("The Discord Bot is not connected to the VC.")
+            if re.fullmatch(r"\d{1,20}", author_id) and author_name:
+                self.chat_users[author_id] = author_name
+                while len(self.chat_users) > 100:
+                    self.chat_users.pop(next(iter(self.chat_users)))
 
             client = self.voice_client.client
             channel = client.get_channel(channel_id)
@@ -778,6 +788,56 @@ class KikiWebVoiceRelay:
             LOGGER.exception("KikiWeb Bot chat posting failed")
             result["error"] = "Discord Bot could not send the message."
         self.enqueue_chat_payload(result)
+
+    def resolve_chat_user(self, value: str) -> Optional[tuple[str, str]]:
+        normalized = " ".join(value.split())[:100]
+        if re.fullmatch(r"\d{1,20}", normalized):
+            return normalized, self.chat_users.get(normalized, normalized)
+
+        matches = [
+            (user_id, name)
+            for user_id, name in self.chat_users.items()
+            if name.casefold() == normalized.casefold()
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    async def timeout_chat_user(self, user_id: str, duration_seconds: int = 60) -> None:
+        if not re.fullmatch(r"\d{1,20}", user_id) or duration_seconds != 60:
+            raise ValueError("The KikiWeb chat timeout request is invalid.")
+        if not self.socket or self.socket.closed:
+            raise RuntimeError("KikiWeb relay is not connected.")
+
+        request_id = secrets.token_urlsafe(18)
+        future = asyncio.get_running_loop().create_future()
+        self.chat_timeout_requests[request_id] = future
+        try:
+            await self.socket.send_json(
+                {
+                    "type": "chat-timeout",
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "durationSeconds": duration_seconds,
+                }
+            )
+            result = await asyncio.wait_for(future, timeout=10)
+            if result.get("ok") is not True:
+                raise RuntimeError(
+                    str(result.get("error", "KikiWeb chat timeout failed."))
+                )
+        finally:
+            self.chat_timeout_requests.pop(request_id, None)
+
+    def resolve_chat_timeout_request(self, payload: dict[str, object]) -> None:
+        request_id = str(payload.get("requestId", ""))
+        future = self.chat_timeout_requests.get(request_id)
+        if future is not None and not future.done():
+            future.set_result(payload)
+
+    def reject_chat_timeout_requests(self, reason: str) -> None:
+        for future in self.chat_timeout_requests.values():
+            if not future.done():
+                future.set_exception(ConnectionError(reason))
+        self.chat_timeout_requests.clear()
 
     def _schedule_chat_history(self) -> None:
         if self.chat_history_task and not self.chat_history_task.done():
@@ -1032,6 +1092,8 @@ class KikiWebVoiceRelay:
                     await self.post_chat_message(payload)
                 elif payload.get("type") == "chat-tts":
                     self.enqueue_chat_tts(payload.get("content"), payload.get("authorName"))
+                elif payload.get("type") == "chat-timeout-result":
+                    self.resolve_chat_timeout_request(payload)
                 elif payload.get("type") == "chat-channel":
                     try:
                         channel_id = int(payload.get("channelId", 0))
@@ -1346,6 +1408,7 @@ class KikiWebVoiceRelay:
                             )
                 self.stop_web_audio()
                 self.clear_audio_queue()
+                self.reject_chat_timeout_requests("KikiWeb relay disconnected.")
                 self.socket = None
 
 
@@ -1595,6 +1658,89 @@ def install_kikiweb_commands(
                 f"{target_channel.name} への自動参加を有効にしました。",
                 ephemeral=True,
             )
+
+        @tree.command(
+            name=f"{command_prefix}_timeout",
+            description="サイトチャットのログインユーザーを1分間タイムアウトします",
+        )
+        @discord.app_commands.guild_only()
+        @discord.app_commands.default_permissions(manage_messages=True)
+        @discord.app_commands.describe(login_user="サイトチャットのログインユーザー")
+        async def kikiweb_timeout(
+            interaction: discord.Interaction,
+            login_user: str,
+        ) -> None:
+            if not interaction.guild:
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            permissions = getattr(interaction.user, "guild_permissions", None)
+            if not permissions or not (
+                permissions.manage_messages or permissions.manage_guild
+            ):
+                await interaction.response.send_message(
+                    "メッセージの管理権限が必要です。",
+                    ephemeral=True,
+                )
+                return
+
+            relay = manager.relays.get(interaction.guild.id)
+            if relay is None or relay.voice_client is None:
+                await interaction.response.send_message(
+                    "このサーバーではKikiWebがVCに接続していません。",
+                    ephemeral=True,
+                )
+                return
+
+            target = relay.resolve_chat_user(login_user)
+            if target is None:
+                await interaction.response.send_message(
+                    "対象を確認できません。候補から選ぶかDiscordユーザーIDを入力してください。",
+                    ephemeral=True,
+                )
+                return
+
+            user_id, user_name = target
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await relay.timeout_chat_user(user_id)
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not timeout a site chat user")
+                await interaction.followup.send(
+                    f"チャットのタイムアウトに失敗しました: {error}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                f"{user_name} をこのサーバーのサイトチャットで1分間タイムアウトしました。",
+                ephemeral=True,
+            )
+
+        @kikiweb_timeout.autocomplete("login_user")
+        async def kikiweb_timeout_user_autocomplete(
+            interaction: discord.Interaction,
+            current: str,
+        ) -> list[discord.app_commands.Choice[str]]:
+            if not interaction.guild:
+                return []
+            relay = manager.relays.get(interaction.guild.id)
+            if relay is None:
+                return []
+            query = current.casefold().strip()
+            choices = []
+            for user_id, name in reversed(relay.chat_users.items()):
+                label = f"{name} ({user_id})"
+                if query and query not in label.casefold():
+                    continue
+                choices.append(
+                    discord.app_commands.Choice(name=label[:100], value=user_id)
+                )
+                if len(choices) >= 25:
+                    break
+            return choices
     else:
 
         @bot.command(name=f"{command_prefix}_join")

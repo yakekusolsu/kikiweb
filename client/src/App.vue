@@ -1847,6 +1847,10 @@ onBeforeUnmount(() => {
           <span>接続中のサーバーを選ぶとチャット欄が表示されます。送信内容は <code>表示名 &gt;&gt; 本文</code> の形式でBotから投稿されます。</span>
         </li>
         <li>
+          <strong>サイトチャットを管理</strong>
+          <span>「メッセージの管理」権限を持つ人は、Discordで <code>/kikiweb_timeout login_user:&lt;ユーザー&gt;</code> を実行すると、対象ユーザーのサイトチャットをそのサーバーだけ1分間停止できます。候補にはサイトから一度投稿したログインユーザーが表示されます。</span>
+        </li>
+        <li>
           <strong>マイクは有効になりません</strong>
           <span>Discordログインで利用できるのはチャットだけです。ログインによってブラウザのマイク権限が要求されることはありません。</span>
         </li>

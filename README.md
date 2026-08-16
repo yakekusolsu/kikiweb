@@ -65,6 +65,8 @@ async def setup_hook():
 `/kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`/kikiweb_leave` で停止します。
 `/kikiweb_auto enabled:true channel:<VC>`で指定VCへの自動参加を保存し、Bot起動時や切断後にも再接続します。
 `/kikiweb_auto enabled:false`で自動参加を解除できます。設定変更にはサーバー管理権限が必要です。
+`/kikiweb_timeout login_user:<ログインユーザー>`で、選択したユーザーのサイトチャットをそのサーバーだけ
+1分間停止できます。実行には「メッセージの管理」権限が必要です。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 RelayのWebSocketが長時間接続中に切断された場合は自動再接続します。送受信タスクが予期せず終了した場合も
 Bot側の監視処理が再起動します。また、接続は5時間30分ごとに予防的に張り直すため、通常はVCへ入り直す必要はありません。
@@ -109,7 +111,7 @@ Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を 
 KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 ```
 
-追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto` が同期されます。サーバー管理権限を持つ
+追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout` が同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
 
 ### サウンドボード
@@ -135,6 +137,10 @@ Webサイト上部からDiscordへログインすると、隠し操作なしで�
 `Discord表示名 >> 本文`の形式でVCチャットへ投稿します。サーバーごとのWebhook登録は不要です。投稿時の
 Discordメンションは無効で、スパム対策としてURLを含む投稿も拒否します。Botに対象VCの「チャンネルを見る」と
 「メッセージを送信」権限を与えてください。
+
+サイトチャットへ一度投稿したログインユーザーは、Discordの
+`/kikiweb_timeout login_user:<ログインユーザー>`の候補に表示されます。「メッセージの管理」権限を持つ人が
+実行すると、対象のDiscord IDはそのサーバーのサイトチャットへ1分間投稿できなくなります。
 
 Botは接続中VCのチャットから最新25件と新着メッセージを受信します。Webには直近50件をメモリ上で表示し、
 サーバーのファイルやデータベースには保存しません。

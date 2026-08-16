@@ -10,6 +10,11 @@ import {
   normalizeChatMessage,
 } from './chatPost.js';
 import {
+  chatTimeoutRetryAfter,
+  normalizeChatTimeoutCommand,
+  setChatTimeout,
+} from './chatTimeout.js';
+import {
   createDiscordSessionToken,
   normalizeDiscordUser,
   verifyDiscordSessionToken,
@@ -20,6 +25,7 @@ const STREAM_VOICE = 0;
 const STREAM_SOUNDBOARD = 1;
 const streams = new Map();
 const chatRateLimits = new Map();
+const chatTimeouts = new Map();
 const pendingChatPosts = new Map();
 const server = createServer(async (request, response) => {
   const origin = config.clientOrigin === '*' ? request.headers.origin || '*' : config.clientOrigin;
@@ -143,6 +149,22 @@ const server = createServer(async (request, response) => {
       });
       return;
     }
+
+    if (authenticatedUser) {
+      const timeoutRetryAfter = chatTimeoutRetryAfter(
+        chatTimeouts,
+        serverId,
+        authenticatedUser.id,
+      );
+      if (timeoutRetryAfter > 0) {
+        response.setHeader('Retry-After', String(timeoutRetryAfter));
+        sendJson(response, 429, {
+          ok: false,
+          error: `このサーバーではあと${timeoutRetryAfter}秒間チャットを利用できません。`,
+        });
+        return;
+      }
+    }
     if (containsChatUrl(content)) {
       sendJson(response, 400, { ok: false, error: 'URLを含むメッセージは送信できません。' });
       return;
@@ -156,7 +178,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     try {
-      await requestBotChatPost(stream, content, authenticatedUser?.name ?? '');
+      await requestBotChatPost(stream, content, authenticatedUser);
       sendJson(response, 200, { ok: true });
     } catch (error) {
       console.error('KikiWeb Bot chat post failed:', error instanceof Error ? error.message : error);
@@ -330,7 +352,7 @@ const publishChatMessage = (stream, message) => {
   }
 };
 
-const requestBotChatPost = (stream, content, authorName = '') =>
+const requestBotChatPost = (stream, content, author = null) =>
   new Promise((resolve, reject) => {
     if (stream.ingestClient?.readyState !== WebSocket.OPEN) {
       reject(new Error('The selected Discord Bot is not connected.'));
@@ -338,7 +360,13 @@ const requestBotChatPost = (stream, content, authorName = '') =>
     }
 
     const requestId = randomUUID();
-    const command = createChatPostCommand(requestId, stream.chatChannelId, content, authorName);
+    const command = createChatPostCommand(
+      requestId,
+      stream.chatChannelId,
+      content,
+      author?.id ?? '',
+      author?.name ?? '',
+    );
     if (!command) {
       reject(new Error('The Discord chat request is invalid.'));
       return;
@@ -691,6 +719,20 @@ wss.on('connection', (ws, _request, url) => {
             }
           } else if (payload.type === 'chat-post-result') {
             resolveBotChatPost(stream, payload);
+          } else if (payload.type === 'chat-timeout') {
+            const requestId = String(payload.requestId ?? '').slice(0, 100);
+            const command = normalizeChatTimeoutCommand(payload);
+            const ok = Boolean(
+              command && setChatTimeout(chatTimeouts, stream.id, command.userId),
+            );
+            ws.send(
+              JSON.stringify({
+                type: 'chat-timeout-result',
+                requestId,
+                ok,
+                ...(ok ? {} : { error: 'チャットのタイムアウト指定が不正です。' }),
+              }),
+            );
           }
         } catch {
           // Ignore malformed status messages while keeping the audio stream alive.
