@@ -64,6 +64,8 @@ STREAM_SOUNDBOARD = 1
 MAX_SOUNDBOARD_BYTES = 10 * 1024 * 1024
 MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
+MAX_CHAT_TTS_DURATION_SECONDS = 180
+CHAT_TTS_OMISSION_TEXT = "以下略"
 JAPANESE_KANA_PATTERN = re.compile(r"[\u3040-\u30ff\uff66-\uff9f]")
 HANGUL_TEXT_PATTERN = re.compile(r"[\uac00-\ud7af]")
 HAN_TEXT_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -195,6 +197,12 @@ def chat_tts_language(value: str) -> str:
         if pattern.search(normalized):
             return language
     return "ja"
+
+
+def truncate_chat_tts_text(value: str) -> str:
+    if len(value) <= MAX_CHAT_TTS_LENGTH:
+        return value
+    return f"{value[:MAX_CHAT_TTS_LENGTH]}、{CHAT_TTS_OMISSION_TEXT}"
 
 
 @dataclass(slots=True)
@@ -914,7 +922,7 @@ class KikiWebVoiceRelay:
         author_prefix = f"{normalized_author} >>" if normalized_author else ""
         if author_prefix and text.startswith(author_prefix):
             text = text[len(author_prefix) :].lstrip()
-        text = text[:MAX_CHAT_TTS_LENGTH]
+        text = truncate_chat_tts_text(text)
         if not text:
             return
         if self.chat_tts_queue.full():
@@ -974,7 +982,7 @@ class KikiWebVoiceRelay:
             "-i",
             "pipe:0",
             "-t",
-            "30",
+            str(MAX_CHAT_TTS_DURATION_SECONDS),
             "-filter:a",
             "loudnorm=I=-16:TP=-1.5:LRA=11",
             "-f",
