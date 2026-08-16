@@ -1807,6 +1807,10 @@ onBeforeUnmount(() => {
       <h2>3. 自動参加を設定</h2>
       <ol class="guide-steps">
         <li>
+          <strong>使用ロールを設定</strong>
+          <span>初期状態ではサーバーオーナーだけが設定できます。オーナーが <code>/kikiweb_role role:&lt;ロール&gt;</code> を実行すると、そのロールにも自動参加とチャットタイムアウトの操作を許可できます。</span>
+        </li>
+        <li>
           <strong>自動参加を有効化</strong>
           <span><code>/kikiweb_auto enabled:true channel:&lt;VC&gt;</code>を実行し、Discordの候補から対象VCを選びます。</span>
         </li>
@@ -1848,7 +1852,7 @@ onBeforeUnmount(() => {
         </li>
         <li>
           <strong>サイトチャットを管理</strong>
-          <span>「メッセージの管理」権限を持つ人は、Discordで <code>/kikiweb_timeout login_user:&lt;ユーザー&gt;</code> を実行すると、対象ユーザーのサイトチャットをそのサーバーだけ1分間停止できます。候補にはサイトから一度投稿したログインユーザーが表示されます。</span>
+          <span>サーバーオーナーまたは許可ロールは、Discordで <code>/kikiweb_timeout login_user:&lt;ユーザー&gt; duration:&lt;時間&gt;</code> を実行できます。時間は1分・5分・30分・1時間・1日・3日から選択でき、候補にはサイトから一度投稿したログインユーザーが表示されます。</span>
         </li>
         <li>
           <strong>マイクは有効になりません</strong>

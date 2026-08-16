@@ -723,7 +723,13 @@ wss.on('connection', (ws, _request, url) => {
             const requestId = String(payload.requestId ?? '').slice(0, 100);
             const command = normalizeChatTimeoutCommand(payload);
             const ok = Boolean(
-              command && setChatTimeout(chatTimeouts, stream.id, command.userId),
+              command &&
+                setChatTimeout(
+                  chatTimeouts,
+                  stream.id,
+                  command.userId,
+                  command.durationSeconds,
+                ),
             );
             ws.send(
               JSON.stringify({

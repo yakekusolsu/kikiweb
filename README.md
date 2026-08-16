@@ -55,6 +55,7 @@ install_kikiweb_commands(
     chat_tts_english_voice=os.environ.get("KIKIWEB_CHAT_TTS_ENGLISH_VOICE", "en-US-AvaMultilingualNeural"),
     use_slash_commands=True,
     auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
+    role_path=os.environ.get("KIKIWEB_ROLE_FILE", "kikiweb_command_roles.json"),
 )
 
 @bot.event
@@ -64,9 +65,11 @@ async def setup_hook():
 
 `/kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`/kikiweb_leave` で停止します。
 `/kikiweb_auto enabled:true channel:<VC>`で指定VCへの自動参加を保存し、Bot起動時や切断後にも再接続します。
-`/kikiweb_auto enabled:false`で自動参加を解除できます。設定変更にはサーバー管理権限が必要です。
-`/kikiweb_timeout login_user:<ログインユーザー>`で、選択したユーザーのサイトチャットをそのサーバーだけ
-1分間停止できます。実行には「メッセージの管理」権限が必要です。
+`/kikiweb_auto enabled:false`で自動参加を解除できます。
+`/kikiweb_timeout login_user:<ログインユーザー> duration:<時間>`で、選択したユーザーのサイトチャットを
+そのサーバーだけ停止できます。時間は1分・5分・30分・1時間・1日・3日から選択します。
+初期状態ではサーバーオーナーだけが`/kikiweb_auto`と`/kikiweb_timeout`を使用できます。オーナーが
+`/kikiweb_role role:<ロール>`を実行すると、指定ロールにも両コマンドを許可できます。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 RelayのWebSocketが長時間接続中に切断された場合は自動再接続します。送受信タスクが予期せず終了した場合も
 Bot側の監視処理が再起動します。また、接続は5時間30分ごとに予防的に張り直すため、通常はVCへ入り直す必要はありません。
@@ -86,6 +89,7 @@ KIKIWEB_CHAT_TTS=true
 KIKIWEB_CHAT_TTS_VOICE=ja-JP-NanamiNeural
 KIKIWEB_CHAT_TTS_ENGLISH_VOICE=en-US-AvaMultilingualNeural
 KIKIWEB_AUTO_JOIN_FILE=/home/container/kikiweb_auto_join.json
+KIKIWEB_ROLE_FILE=/home/container/kikiweb_command_roles.json
 DISCORD_GUILD_ID=コマンドをすぐ反映したいサーバーID
 ```
 
@@ -111,7 +115,7 @@ Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を 
 KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 ```
 
-追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout` が同期されます。サーバー管理権限を持つ
+追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout`、`/kikiweb_role` が同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
 
 ### サウンドボード
@@ -139,8 +143,9 @@ Discordメンションは無効で、スパム対策としてURLを含む投稿�
 「メッセージを送信」権限を与えてください。
 
 サイトチャットへ一度投稿したログインユーザーは、Discordの
-`/kikiweb_timeout login_user:<ログインユーザー>`の候補に表示されます。「メッセージの管理」権限を持つ人が
-実行すると、対象のDiscord IDはそのサーバーのサイトチャットへ1分間投稿できなくなります。
+`/kikiweb_timeout login_user:<ログインユーザー> duration:<時間>`の候補に表示されます。サーバーオーナー、
+または`/kikiweb_role`で許可されたロールが実行すると、対象のDiscord IDは選択時間中、そのサーバーの
+サイトチャットへ投稿できなくなります。
 
 Botは接続中VCのチャットから最新25件と新着メッセージを受信します。Webには直近50件をメモリ上で表示し、
 サーバーのファイルやデータベースには保存しません。

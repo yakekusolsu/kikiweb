@@ -11,3 +11,5 @@ __pycache__
 *.pyc
 kikiweb_auto_join.json
 kikiweb_auto_join.json.tmp
+kikiweb_command_roles.json
+kikiweb_command_roles.json.tmp

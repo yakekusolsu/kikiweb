@@ -1,4 +1,13 @@
-export const CHAT_TIMEOUT_SECONDS = 60;
+export const CHAT_TIMEOUT_DURATIONS_SECONDS = Object.freeze([
+  60,
+  5 * 60,
+  30 * 60,
+  60 * 60,
+  24 * 60 * 60,
+  3 * 24 * 60 * 60,
+]);
+
+const validDuration = (value) => CHAT_TIMEOUT_DURATIONS_SECONDS.includes(value);
 
 const validDiscordId = (value) => /^\d{1,20}$/.test(String(value ?? ''));
 
@@ -10,7 +19,7 @@ export const normalizeChatTimeoutCommand = (payload) => {
     requestId.length < 8 ||
     requestId.length > 100 ||
     !validDiscordId(userId) ||
-    durationSeconds !== CHAT_TIMEOUT_SECONDS
+    !validDuration(durationSeconds)
   ) {
     return null;
   }
@@ -19,11 +28,22 @@ export const normalizeChatTimeoutCommand = (payload) => {
 
 const timeoutKey = (serverId, userId) => `${serverId}:${userId}`;
 
-export const setChatTimeout = (timeouts, serverId, userId, now = Date.now()) => {
-  if (!(timeouts instanceof Map) || !validDiscordId(serverId) || !validDiscordId(userId)) {
+export const setChatTimeout = (
+  timeouts,
+  serverId,
+  userId,
+  durationSeconds,
+  now = Date.now(),
+) => {
+  if (
+    !(timeouts instanceof Map) ||
+    !validDiscordId(serverId) ||
+    !validDiscordId(userId) ||
+    !validDuration(durationSeconds)
+  ) {
     return false;
   }
-  timeouts.set(timeoutKey(serverId, userId), now + CHAT_TIMEOUT_SECONDS * 1_000);
+  timeouts.set(timeoutKey(serverId, userId), now + durationSeconds * 1_000);
   return true;
 };
 

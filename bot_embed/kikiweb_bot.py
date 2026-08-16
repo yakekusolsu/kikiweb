@@ -54,6 +54,7 @@ chat_tts_english_voice = os.getenv(
     "en-US-AvaMultilingualNeural",
 )
 auto_join_file = os.getenv("KIKIWEB_AUTO_JOIN_FILE", "/home/container/kikiweb_auto_join.json")
+role_file = os.getenv("KIKIWEB_ROLE_FILE", "/home/container/kikiweb_command_roles.json")
 
 if not discord_token:
     raise RuntimeError("DISCORD_TOKEN is required. Set it in /home/container/.env.")
@@ -74,6 +75,7 @@ install_kikiweb_commands(
     chat_tts_english_voice=chat_tts_english_voice,
     use_slash_commands=True,
     auto_join_path=auto_join_file,
+    role_path=role_file,
 )
 
 commands_synced = False

@@ -27,6 +27,7 @@ install_kikiweb_commands(
     ),
     use_slash_commands=True,
     auto_join_path=os.environ.get("KIKIWEB_AUTO_JOIN_FILE", "kikiweb_auto_join.json"),
+    role_path=os.environ.get("KIKIWEB_ROLE_FILE", "kikiweb_command_roles.json"),
 )
 
 

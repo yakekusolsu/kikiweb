@@ -66,6 +66,14 @@ MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
 MAX_CHAT_TTS_DURATION_SECONDS = 180
 CHAT_TTS_OMISSION_TEXT = "以下略"
+CHAT_TIMEOUT_DURATIONS = {
+    60: "1分",
+    5 * 60: "5分",
+    30 * 60: "30分",
+    60 * 60: "1時間",
+    24 * 60 * 60: "1日",
+    3 * 24 * 60 * 60: "3日",
+}
 JAPANESE_KANA_PATTERN = re.compile(r"[\u3040-\u30ff\uff66-\uff9f]")
 HANGUL_TEXT_PATTERN = re.compile(r"[\uac00-\ud7af]")
 HAN_TEXT_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -810,7 +818,10 @@ class KikiWebVoiceRelay:
         return matches[0] if len(matches) == 1 else None
 
     async def timeout_chat_user(self, user_id: str, duration_seconds: int = 60) -> None:
-        if not re.fullmatch(r"\d{1,20}", user_id) or duration_seconds != 60:
+        if (
+            not re.fullmatch(r"\d{1,20}", user_id)
+            or duration_seconds not in CHAT_TIMEOUT_DURATIONS
+        ):
             raise ValueError("The KikiWeb chat timeout request is invalid.")
         if not self.socket or self.socket.closed:
             raise RuntimeError("KikiWeb relay is not connected.")
@@ -1426,11 +1437,18 @@ class KikiWebRelayManager:
         config: KikiWebConfig,
         *,
         auto_join_path: str | Path = "kikiweb_auto_join.json",
+        role_path: Optional[str | Path] = None,
     ) -> None:
         self.config = config
         self.relays: dict[int, KikiWebVoiceRelay] = {}
         self.auto_join_path = Path(auto_join_path)
         self.auto_join_channels = self._load_auto_join_channels()
+        self.role_path = (
+            Path(role_path)
+            if role_path is not None
+            else self.auto_join_path.with_name("kikiweb_command_roles.json")
+        )
+        self.command_role_ids = self._load_command_role_ids()
         self.auto_join_lock = asyncio.Lock()
 
     def _load_auto_join_channels(self) -> dict[int, int]:
@@ -1475,6 +1493,52 @@ class KikiWebRelayManager:
         if removed:
             self._save_auto_join_channels()
         return removed
+
+    def _load_command_role_ids(self) -> dict[int, int]:
+        try:
+            payload = json.loads(self.role_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, TypeError):
+            LOGGER.exception("KikiWeb could not load command roles from %s", self.role_path)
+            return {}
+
+        if not isinstance(payload, dict):
+            return {}
+
+        role_ids: dict[int, int] = {}
+        for raw_guild_id, raw_role_id in payload.items():
+            try:
+                guild_id = int(raw_guild_id)
+                role_id = int(raw_role_id)
+            except (TypeError, ValueError):
+                continue
+            if guild_id > 0 and role_id > 0:
+                role_ids[guild_id] = role_id
+        return role_ids
+
+    def _save_command_role_ids(self) -> None:
+        self.role_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.role_path.with_suffix(f"{self.role_path.suffix}.tmp")
+        payload = {
+            str(guild_id): role_id
+            for guild_id, role_id in self.command_role_ids.items()
+        }
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(self.role_path)
+
+    def set_command_role(self, guild_id: int, role_id: int) -> None:
+        self.command_role_ids[guild_id] = role_id
+        self._save_command_role_ids()
+
+    def can_use_restricted_command(self, member: discord.Member) -> bool:
+        if member.id == member.guild.owner_id:
+            return True
+        role_id = self.command_role_ids.get(member.guild.id)
+        return role_id is not None and any(role.id == role_id for role in member.roles)
 
     async def connect_auto_channels(
         self,
@@ -1569,6 +1633,7 @@ def install_kikiweb_commands(
     command_prefix: str = "kikiweb",
     use_slash_commands: bool = True,
     auto_join_path: str | Path = "kikiweb_auto_join.json",
+    role_path: Optional[str | Path] = None,
 ) -> KikiWebRelayManager:
     manager = KikiWebRelayManager(
         KikiWebConfig(
@@ -1580,6 +1645,7 @@ def install_kikiweb_commands(
             chat_tts_english_voice=chat_tts_english_voice,
         ),
         auto_join_path=auto_join_path,
+        role_path=role_path,
     )
 
     if use_slash_commands:
@@ -1610,7 +1676,6 @@ def install_kikiweb_commands(
 
         @tree.command(name=f"{command_prefix}_auto", description="指定VCへの自動参加を設定します")
         @discord.app_commands.guild_only()
-        @discord.app_commands.default_permissions(manage_guild=True)
         @discord.app_commands.describe(
             enabled="trueで自動参加を有効、falseで無効にします",
             channel="自動参加するボイスチャンネル（trueの場合）",
@@ -1625,8 +1690,13 @@ def install_kikiweb_commands(
                 return
 
             member = interaction.user
-            if not isinstance(member, discord.Member) or not member.guild_permissions.manage_guild:
-                await interaction.response.send_message("サーバー管理権限が必要です。", ephemeral=True)
+            if not isinstance(member, discord.Member) or not manager.can_use_restricted_command(
+                member
+            ):
+                await interaction.response.send_message(
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
+                    ephemeral=True,
+                )
                 return
 
             if not enabled:
@@ -1669,14 +1739,23 @@ def install_kikiweb_commands(
 
         @tree.command(
             name=f"{command_prefix}_timeout",
-            description="サイトチャットのログインユーザーを1分間タイムアウトします",
+            description="サイトチャットのログインユーザーをタイムアウトします",
         )
         @discord.app_commands.guild_only()
-        @discord.app_commands.default_permissions(manage_messages=True)
-        @discord.app_commands.describe(login_user="サイトチャットのログインユーザー")
+        @discord.app_commands.describe(
+            login_user="サイトチャットのログインユーザー",
+            duration="タイムアウトする時間",
+        )
+        @discord.app_commands.choices(
+            duration=[
+                discord.app_commands.Choice(name=label, value=seconds)
+                for seconds, label in CHAT_TIMEOUT_DURATIONS.items()
+            ]
+        )
         async def kikiweb_timeout(
             interaction: discord.Interaction,
             login_user: str,
+            duration: discord.app_commands.Choice[int],
         ) -> None:
             if not interaction.guild:
                 await interaction.response.send_message(
@@ -1685,12 +1764,12 @@ def install_kikiweb_commands(
                 )
                 return
 
-            permissions = getattr(interaction.user, "guild_permissions", None)
-            if not permissions or not (
-                permissions.manage_messages or permissions.manage_guild
+            member = interaction.user
+            if not isinstance(member, discord.Member) or not manager.can_use_restricted_command(
+                member
             ):
                 await interaction.response.send_message(
-                    "メッセージの管理権限が必要です。",
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
                     ephemeral=True,
                 )
                 return
@@ -1714,7 +1793,7 @@ def install_kikiweb_commands(
             user_id, user_name = target
             await interaction.response.defer(ephemeral=True, thinking=True)
             try:
-                await relay.timeout_chat_user(user_id)
+                await relay.timeout_chat_user(user_id, duration.value)
             except Exception as error:
                 LOGGER.exception("KikiWeb could not timeout a site chat user")
                 await interaction.followup.send(
@@ -1723,7 +1802,7 @@ def install_kikiweb_commands(
                 )
                 return
             await interaction.followup.send(
-                f"{user_name} をこのサーバーのサイトチャットで1分間タイムアウトしました。",
+                f"{user_name} をこのサーバーのサイトチャットで{duration.name}タイムアウトしました。",
                 ephemeral=True,
             )
 
@@ -1749,6 +1828,50 @@ def install_kikiweb_commands(
                 if len(choices) >= 25:
                     break
             return choices
+
+        @tree.command(
+            name=f"{command_prefix}_role",
+            description="auto・timeoutコマンドを使用できるロールを設定します",
+        )
+        @discord.app_commands.guild_only()
+        @discord.app_commands.default_permissions(manage_guild=True)
+        @discord.app_commands.describe(role="auto・timeoutコマンドを許可するロール")
+        async def kikiweb_role(
+            interaction: discord.Interaction,
+            role: discord.Role,
+        ) -> None:
+            if not interaction.guild:
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+            if interaction.user.id != interaction.guild.owner_id:
+                await interaction.response.send_message(
+                    "このコマンドはサーバーオーナーだけが使用できます。",
+                    ephemeral=True,
+                )
+                return
+            if role.is_default() or role.managed:
+                await interaction.response.send_message(
+                    "@everyoneやBot・連携サービスが管理するロールは指定できません。",
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                manager.set_command_role(interaction.guild.id, role.id)
+            except OSError as error:
+                LOGGER.exception("KikiWeb could not save the command role")
+                await interaction.response.send_message(
+                    f"許可ロールを保存できませんでした: {error}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_message(
+                f"サーバーオーナーと「{role.name}」ロールに /kikiweb_auto と /kikiweb_timeout を許可しました。",
+                ephemeral=True,
+            )
     else:
 
         @bot.command(name=f"{command_prefix}_join")
