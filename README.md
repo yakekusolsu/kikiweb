@@ -126,12 +126,14 @@ KikiWeb Botを導入した二つのDiscordサーバー間で、VCの音声を双
 1. 招待元で使用するVCへ入り、`/kikiweb_collab_create`を実行します。BotがVCへ接続し、10分間有効な6桁コードを表示します。
 2. 相手側も使用するVCへ入り、`/kikiweb_collab_join code:<6桁コード>`を実行します。
 3. 接続後は両VCの通常音声、読み上げBot、サウンドボード、KikiWebからの送話が相互に流れます。
-4. `/kikiweb_collab_mute user:<メンバー> muted:true`で、その人の音声だけ相手サーバーへの送信を停止できます。`false`で再開します。
-5. どちらかで`/kikiweb_collab_leave`を実行すると、コラボだけを終了します。通常のKikiWeb中継は継続します。
+4. VCチャットへ`k!`と送ると、自分の相手サーバー向けマイクをトグル式でOFF・ONできます。
+5. `/kikiweb_collab_mute user:<メンバー> muted:true`で、その人の音声だけ相手サーバーへの送信を停止できます。`false`で再開します。
+6. どちらかで`/kikiweb_collab_leave`を実行すると、コラボだけを終了します。通常のKikiWeb中継は継続します。
 
 一つのサーバーが同時に接続できる相手は一つです。BotをVCから退出させる`/kikiweb_leave`を実行した場合も、
 そのサーバーのコラボ接続は終了します。本人は自分の音声を切り替えられ、他のメンバーを切り替えられるのは
 サーバーオーナーまたは`/kikiweb_role`で許可されたロールだけです。個別ミュートはコラボ終了時に解除されます。
+`k!`を利用するにはDiscord Developer PortalでMessage Content Intentを有効にしてください。
 
 ### サウンドボード
 

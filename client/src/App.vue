@@ -1836,7 +1836,7 @@ onBeforeUnmount(() => {
         </li>
         <li>
           <strong>メンバーを個別ミュート</strong>
-          <span><code>/kikiweb_collab_mute user:&lt;メンバー&gt; muted:true</code>で、その人の音声だけ相手サーバーへの送信を停止できます。<code>false</code>で再開します。本人は自分を操作でき、他人の操作には許可ロールが必要です。</span>
+          <span>VCチャットへ<code>k!</code>と送ると、自分の相手サーバー向けマイクをOFF・ONできます。<code>/kikiweb_collab_mute user:&lt;メンバー&gt; muted:true</code>では指定した人を停止でき、<code>false</code>で再開します。他人の操作には許可ロールが必要です。</span>
         </li>
         <li>
           <strong>コラボを終了</strong>

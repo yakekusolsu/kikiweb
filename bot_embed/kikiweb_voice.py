@@ -1796,6 +1796,16 @@ class KikiWebRelayManager:
         else:
             muted_users.discard(user_id)
 
+    def toggle_collab_user_muted(self, guild_id: int, user_id: int) -> bool:
+        if guild_id not in self.collab_partners:
+            raise RuntimeError("このサーバーはコラボVCへ接続していません。")
+        muted_users = self.collab_muted_users.setdefault(guild_id, set())
+        if user_id in muted_users:
+            muted_users.remove(user_id)
+            return False
+        muted_users.add(user_id)
+        return True
+
     def forward_collab_pcm(self, guild_id: int, source_id: int, pcm: bytes) -> None:
         partner_guild_id = self.collab_partners.get(guild_id)
         if (
@@ -2374,6 +2384,35 @@ def install_kikiweb_commands(
 
     @bot.listen("on_message")
     async def kikiweb_chat_message(message):
+        if (
+            message.guild is not None
+            and isinstance(message.author, discord.Member)
+            and not message.author.bot
+            and message.content.strip().casefold() == "k!"
+        ):
+            relay = manager.relays.get(message.guild.id)
+            relay_channel = getattr(getattr(relay, "voice_client", None), "channel", None)
+            user_channel = getattr(getattr(message.author, "voice", None), "channel", None)
+            if relay_channel is None or user_channel is None or relay_channel.id != user_channel.id:
+                await message.reply(
+                    "KikiWeb Botと同じコラボVCに参加してから `k!` を送信してください。",
+                    mention_author=False,
+                )
+                return
+            try:
+                muted = manager.toggle_collab_user_muted(
+                    message.guild.id,
+                    message.author.id,
+                )
+            except RuntimeError as error:
+                await message.reply(str(error), mention_author=False)
+                return
+            state = "OFF" if muted else "ON"
+            await message.reply(
+                f"相手サーバーへのコラボマイクを {state} にしました。",
+                mention_author=False,
+            )
+            return
         await manager.relay_chat_message(message)
 
     @bot.listen("on_ready")
