@@ -7,11 +7,14 @@ import logging
 import queue
 import re
 import secrets
+import sys
+import threading
 import time
 import unicodedata
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
@@ -66,6 +69,7 @@ MAX_CHAT_TTS_BYTES = 5 * 1024 * 1024
 MAX_CHAT_TTS_LENGTH = 500
 MAX_CHAT_TTS_DURATION_SECONDS = 180
 CHAT_TTS_OMISSION_TEXT = "以下略"
+COLLAB_INVITE_TTL_SECONDS = 10 * 60
 CHAT_TIMEOUT_DURATIONS = {
     60: "1分",
     5 * 60: "5分",
@@ -253,6 +257,14 @@ class KikiWebConfig:
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+@dataclass(slots=True)
+class KikiWebCollabInvite:
+    code: str
+    guild_id: int
+    channel_id: int
+    expires_at: float
+
+
 class KikiWebDAVEAudioReader(AudioReader):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -316,36 +328,82 @@ class KikiWebVoiceRecvClient(voice_recv.VoiceRecvClient):
 
 
 class KikiWebWebAudioSource(discord.AudioSource):
-    """A short PCM buffer used to play browser microphone audio into Discord."""
+    """Mixes short PCM buffers from browser, TTS, and collaboration audio."""
 
     def __init__(self) -> None:
-        self.frames: queue.Queue[bytes] = queue.Queue(maxsize=50)
+        self.frame_queues: dict[str, queue.Queue[bytes]] = {}
+        self.last_feed_at: dict[str, float] = {}
+        self.lock = threading.Lock()
 
     def is_opus(self) -> bool:
         return False
 
     def read(self) -> bytes:
-        try:
-            return self.frames.get(timeout=FRAME_MS / 1000)
-        except queue.Empty:
+        with self.lock:
+            frame_queues = list(self.frame_queues.items())
+        frames = []
+        for _, frame_queue in frame_queues:
+            with contextlib.suppress(queue.Empty):
+                frames.append(frame_queue.get_nowait())
+        stale_before = time.monotonic() - 5
+        with self.lock:
+            for source, frame_queue in frame_queues:
+                if (
+                    source.startswith("collab:")
+                    and frame_queue.empty()
+                    and self.last_feed_at.get(source, 0) < stale_before
+                    and self.frame_queues.get(source) is frame_queue
+                ):
+                    self.frame_queues.pop(source, None)
+                    self.last_feed_at.pop(source, None)
+        if not frames:
             return PCM_SILENCE
+        if len(frames) == 1:
+            return frames[0]
 
-    def feed(self, pcm: bytes) -> None:
+        mixed = [0] * (FRAME_BYTES // BYTES_PER_SAMPLE)
+        for frame in frames:
+            samples = array("h")
+            samples.frombytes(frame)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            for index, sample in enumerate(samples):
+                mixed[index] += sample
+
+        output = array("h", (max(-32768, min(32767, sample)) for sample in mixed))
+        if sys.byteorder != "little":
+            output.byteswap()
+        return output.tobytes()
+
+    def feed(self, pcm: bytes, *, source: str = "browser") -> None:
+        with self.lock:
+            frame_queue = self.frame_queues.get(source)
+            if frame_queue is None:
+                frame_queue = queue.Queue(maxsize=50)
+                self.frame_queues[source] = frame_queue
+            self.last_feed_at[source] = time.monotonic()
         for offset in range(0, len(pcm), FRAME_BYTES):
             frame = pcm[offset : offset + FRAME_BYTES]
             if len(frame) != FRAME_BYTES:
                 continue
-            if self.frames.full():
+            if frame_queue.full():
                 with contextlib.suppress(queue.Empty):
-                    self.frames.get_nowait()
-            self.frames.put_nowait(frame)
+                    frame_queue.get_nowait()
+            frame_queue.put_nowait(frame)
 
-    def clear(self) -> None:
-        while True:
-            try:
-                self.frames.get_nowait()
-            except queue.Empty:
+    def clear(self, source: Optional[str] = None, *, prefix: Optional[str] = None) -> None:
+        with self.lock:
+            if source is not None:
+                self.frame_queues.pop(source, None)
+                self.last_feed_at.pop(source, None)
                 return
+            if prefix is not None:
+                for key in [key for key in self.frame_queues if key.startswith(prefix)]:
+                    self.frame_queues.pop(key, None)
+                    self.last_feed_at.pop(key, None)
+                return
+            self.frame_queues.clear()
+            self.last_feed_at.clear()
 
 
 class KikiWebAudioSink(voice_recv.AudioSink):
@@ -379,7 +437,9 @@ class KikiWebAudioSink(voice_recv.AudioSink):
             self.pcm_remainders[source_id] = buffered_pcm
             return
 
-        self.relay.enqueue_pcm(buffered_pcm[:complete_bytes], source_id=source_id)
+        complete_pcm = buffered_pcm[:complete_bytes]
+        self.relay.enqueue_pcm(complete_pcm, source_id=source_id)
+        self.relay.forward_collab_pcm(complete_pcm, source_id=source_id)
         remainder = buffered_pcm[complete_bytes:]
         if remainder:
             self.pcm_remainders[source_id] = remainder
@@ -392,8 +452,13 @@ class KikiWebAudioSink(voice_recv.AudioSink):
 
 
 class KikiWebVoiceRelay:
-    def __init__(self, config: KikiWebConfig) -> None:
+    def __init__(
+        self,
+        config: KikiWebConfig,
+        collab_forwarder: Optional[Callable[[int, int, bytes], None]] = None,
+    ) -> None:
         self.config = config
+        self.collab_forwarder = collab_forwarder
         self.voice_client: Optional[KikiWebVoiceRecvClient] = None
         self.sink: Optional[KikiWebAudioSink] = None
         self.session: Optional[aiohttp.ClientSession] = None
@@ -429,6 +494,7 @@ class KikiWebVoiceRelay:
         self.web_audio_source = KikiWebWebAudioSource()
         self.browser_audio_active = False
         self.chat_tts_playing = False
+        self.collab_partner_guild_id: Optional[int] = None
         self.chat_tts_voice_cache: dict[str, str] = {
             "ja": config.chat_tts_voice,
             "en": config.chat_tts_english_voice,
@@ -504,6 +570,8 @@ class KikiWebVoiceRelay:
 
     async def disconnect(self) -> None:
         self.closed.set()
+        self.collab_partner_guild_id = None
+        self.web_audio_source.clear()
 
         if self.dave_reconnect_task and self.dave_reconnect_task is not asyncio.current_task():
             self.dave_reconnect_task.cancel()
@@ -672,6 +740,35 @@ class KikiWebVoiceRelay:
             return
 
         self.loop.call_soon_threadsafe(self._enqueue_pcm_in_loop, pcm, stream_type, source_id)
+
+    def forward_collab_pcm(self, pcm: bytes, *, source_id: int) -> None:
+        if self.collab_partner_guild_id is None or self.collab_forwarder is None:
+            return
+        self.collab_forwarder(self.server_id, source_id, pcm)
+
+    def play_collab_pcm(self, origin_guild_id: int, source_id: int, pcm: bytes) -> None:
+        if (
+            self.closed.is_set()
+            or self.collab_partner_guild_id != origin_guild_id
+            or not self.voice_client
+            or not self.voice_client.is_connected()
+        ):
+            return
+        self.web_audio_source.feed(
+            pcm,
+            source=f"collab:{origin_guild_id}:{source_id}",
+        )
+        if not self.voice_client.is_playing() and self.loop:
+            self.loop.call_soon_threadsafe(self._ensure_web_audio_playing)
+
+    def set_collab_partner(self, partner_guild_id: Optional[int]) -> None:
+        self.collab_partner_guild_id = partner_guild_id
+        self.web_audio_source.clear(prefix="collab:")
+        if partner_guild_id is not None:
+            self._ensure_web_audio_playing()
+        elif not self.browser_audio_active and not self.chat_tts_playing:
+            if self.voice_client and self.voice_client.is_playing():
+                self.voice_client.stop()
 
     def clear_audio_queue(self) -> None:
         while True:
@@ -900,9 +997,7 @@ class KikiWebVoiceRelay:
             return
 
         self.browser_audio_active = True
-        if self.chat_tts_playing:
-            return
-        self.web_audio_source.feed(pcm)
+        self.web_audio_source.feed(pcm, source="browser")
         self._ensure_web_audio_playing()
 
     def _ensure_web_audio_playing(self) -> bool:
@@ -919,10 +1014,13 @@ class KikiWebVoiceRelay:
 
     def stop_web_audio(self) -> None:
         self.browser_audio_active = False
-        if self.chat_tts_playing:
-            return
-        self.web_audio_source.clear()
-        if self.voice_client and self.voice_client.is_playing():
+        self.web_audio_source.clear("browser")
+        if (
+            not self.chat_tts_playing
+            and self.collab_partner_guild_id is None
+            and self.voice_client
+            and self.voice_client.is_playing()
+        ):
             self.voice_client.stop()
 
     def enqueue_chat_tts(self, content: object, author_name: object = "") -> None:
@@ -1021,21 +1119,21 @@ class KikiWebVoiceRelay:
             return
 
         self.chat_tts_playing = True
-        self.web_audio_source.clear()
+        self.web_audio_source.clear("tts")
         try:
             if not self._ensure_web_audio_playing():
                 return
             prebuffer_count = min(10, len(frames))
             for frame in frames[:prebuffer_count]:
-                self.web_audio_source.feed(frame)
+                self.web_audio_source.feed(frame, source="tts")
             for frame in frames[prebuffer_count:]:
                 await asyncio.sleep(FRAME_MS / 1000)
-                self.web_audio_source.feed(frame)
+                self.web_audio_source.feed(frame, source="tts")
             await asyncio.sleep((prebuffer_count + 2) * FRAME_MS / 1000)
         finally:
             self.chat_tts_playing = False
-            if not self.browser_audio_active:
-                self.web_audio_source.clear()
+            self.web_audio_source.clear("tts")
+            if not self.browser_audio_active and self.collab_partner_guild_id is None:
                 if self.voice_client and self.voice_client.is_playing():
                     self.voice_client.stop()
 
@@ -1197,6 +1295,7 @@ class KikiWebVoiceRelay:
                 if len(frame) != FRAME_BYTES or self.closed.is_set():
                     break
                 self._enqueue_pcm_in_loop(frame, STREAM_SOUNDBOARD, source_id)
+                self.forward_collab_pcm(frame, source_id=source_id)
                 await asyncio.sleep(FRAME_MS / 1000)
         except FileNotFoundError:
             LOGGER.error("KikiWeb soundboard requires ffmpeg on the Discord Bot host.")
@@ -1450,6 +1549,8 @@ class KikiWebRelayManager:
         )
         self.command_role_ids = self._load_command_role_ids()
         self.auto_join_lock = asyncio.Lock()
+        self.collab_invites: dict[str, KikiWebCollabInvite] = {}
+        self.collab_partners: dict[int, int] = {}
 
     def _load_auto_join_channels(self) -> dict[int, int]:
         try:
@@ -1540,6 +1641,102 @@ class KikiWebRelayManager:
         role_id = self.command_role_ids.get(member.guild.id)
         return role_id is not None and any(role.id == role_id for role in member.roles)
 
+    def _prune_collab_invites(self) -> None:
+        now = time.monotonic()
+        for code in [
+            code
+            for code, invite in self.collab_invites.items()
+            if invite.expires_at <= now
+        ]:
+            self.collab_invites.pop(code, None)
+
+    def create_collab_invite(
+        self,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> str:
+        self._prune_collab_invites()
+        if channel.guild.id in self.collab_partners:
+            raise RuntimeError("このサーバーは既にコラボVCへ接続しています。")
+        relay = self.relays.get(channel.guild.id)
+        if (
+            relay is None
+            or relay.voice_client is None
+            or not relay.voice_client.is_connected()
+            or getattr(relay.voice_client.channel, "id", None) != channel.id
+        ):
+            raise RuntimeError("KikiWeb Botが対象VCへ接続していません。")
+
+        for code, invite in list(self.collab_invites.items()):
+            if invite.guild_id == channel.guild.id:
+                self.collab_invites.pop(code, None)
+        for _ in range(20):
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            if code not in self.collab_invites:
+                break
+        else:
+            raise RuntimeError("コラボVCの招待コードを作成できませんでした。")
+        self.collab_invites[code] = KikiWebCollabInvite(
+            code=code,
+            guild_id=channel.guild.id,
+            channel_id=channel.id,
+            expires_at=time.monotonic() + COLLAB_INVITE_TTL_SECONDS,
+        )
+        return code
+
+    async def join_collab(
+        self,
+        code: str,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> KikiWebCollabInvite:
+        self._prune_collab_invites()
+        normalized_code = code.strip()
+        invite = self.collab_invites.get(normalized_code)
+        if invite is None:
+            raise ValueError("招待コードが無効か、有効期限が切れています。")
+        if invite.guild_id == channel.guild.id:
+            raise ValueError("同じDiscordサーバー同士は接続できません。")
+        if invite.guild_id in self.collab_partners or channel.guild.id in self.collab_partners:
+            raise RuntimeError("どちらかのサーバーが既にコラボVCへ接続しています。")
+
+        origin_relay = self.relays.get(invite.guild_id)
+        if (
+            origin_relay is None
+            or origin_relay.voice_client is None
+            or not origin_relay.voice_client.is_connected()
+            or getattr(origin_relay.voice_client.channel, "id", None) != invite.channel_id
+        ):
+            self.collab_invites.pop(normalized_code, None)
+            raise RuntimeError("招待元のKikiWeb BotがVCから切断されています。")
+
+        target_relay = await self.connect(channel)
+        self.collab_partners[invite.guild_id] = channel.guild.id
+        self.collab_partners[channel.guild.id] = invite.guild_id
+        origin_relay.set_collab_partner(channel.guild.id)
+        target_relay.set_collab_partner(invite.guild_id)
+        self.collab_invites.pop(normalized_code, None)
+        return invite
+
+    def end_collab(self, guild_id: int) -> Optional[int]:
+        partner_guild_id = self.collab_partners.pop(guild_id, None)
+        if partner_guild_id is None:
+            return None
+        self.collab_partners.pop(partner_guild_id, None)
+        relay = self.relays.get(guild_id)
+        partner_relay = self.relays.get(partner_guild_id)
+        if relay is not None:
+            relay.set_collab_partner(None)
+        if partner_relay is not None:
+            partner_relay.set_collab_partner(None)
+        return partner_guild_id
+
+    def forward_collab_pcm(self, guild_id: int, source_id: int, pcm: bytes) -> None:
+        partner_guild_id = self.collab_partners.get(guild_id)
+        if partner_guild_id is None:
+            return
+        partner_relay = self.relays.get(partner_guild_id)
+        if partner_relay is not None:
+            partner_relay.play_collab_pcm(guild_id, source_id, pcm)
+
     async def connect_auto_channels(
         self,
         bot,
@@ -1586,17 +1783,24 @@ class KikiWebRelayManager:
     ) -> KikiWebVoiceRelay:
         relay = self.relays.get(channel.guild.id)
         if relay is None:
-            relay = KikiWebVoiceRelay(self.config)
+            relay = KikiWebVoiceRelay(
+                self.config,
+                collab_forwarder=self.forward_collab_pcm,
+            )
             self.relays[channel.guild.id] = relay
         await relay.connect(channel)
         return relay
 
     async def disconnect(self, guild_id: int) -> None:
+        self.end_collab(guild_id)
         relay = self.relays.pop(guild_id, None)
         if relay is not None:
             await relay.disconnect()
 
     async def disconnect_all(self) -> None:
+        for guild_id in list(self.collab_partners):
+            self.end_collab(guild_id)
+        self.collab_invites.clear()
         relays = list(self.relays.values())
         self.relays.clear()
         await asyncio.gather(*(relay.disconnect() for relay in relays), return_exceptions=True)
@@ -1830,12 +2034,146 @@ def install_kikiweb_commands(
             return choices
 
         @tree.command(
+            name=f"{command_prefix}_collab_create",
+            description="参加中のVCからコラボVCの招待コードを作成します",
+        )
+        @discord.app_commands.guild_only()
+        async def kikiweb_collab_create(interaction: discord.Interaction) -> None:
+            if not interaction.guild or not isinstance(interaction.user, discord.Member):
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+            if not manager.can_use_restricted_command(interaction.user):
+                await interaction.response.send_message(
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
+                    ephemeral=True,
+                )
+                return
+
+            voice = interaction.user.voice
+            if not voice or not isinstance(
+                voice.channel,
+                (discord.VoiceChannel, discord.StageChannel),
+            ):
+                await interaction.response.send_message(
+                    "コラボに使用するVCへ入ってから実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await manager.connect(voice.channel)
+                code = manager.create_collab_invite(voice.channel)
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not create a collaboration invite")
+                await interaction.followup.send(
+                    f"コラボVCの招待コードを作成できませんでした: {error}",
+                    ephemeral=True,
+                )
+                return
+            await interaction.followup.send(
+                "コラボVCの招待コードは "
+                f"`{code}` です。10分以内に相手サーバーで "
+                f"`/{command_prefix}_collab_join code:{code}` を実行してください。",
+                ephemeral=True,
+            )
+
+        @tree.command(
+            name=f"{command_prefix}_collab_join",
+            description="招待コードを使って二つのサーバーのVCを接続します",
+        )
+        @discord.app_commands.guild_only()
+        @discord.app_commands.describe(code="相手サーバーで作成した6桁の招待コード")
+        async def kikiweb_collab_join(
+            interaction: discord.Interaction,
+            code: str,
+        ) -> None:
+            if not interaction.guild or not isinstance(interaction.user, discord.Member):
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+            if not manager.can_use_restricted_command(interaction.user):
+                await interaction.response.send_message(
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
+                    ephemeral=True,
+                )
+                return
+
+            voice = interaction.user.voice
+            if not voice or not isinstance(
+                voice.channel,
+                (discord.VoiceChannel, discord.StageChannel),
+            ):
+                await interaction.response.send_message(
+                    "コラボに使用するVCへ入ってから実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                invite = await manager.join_collab(code, voice.channel)
+            except (ValueError, RuntimeError) as error:
+                await interaction.followup.send(str(error), ephemeral=True)
+                return
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not join a collaboration")
+                await interaction.followup.send(
+                    f"コラボVCへ接続できませんでした: {error}",
+                    ephemeral=True,
+                )
+                return
+
+            origin_guild = bot.get_guild(invite.guild_id)
+            origin_name = origin_guild.name if origin_guild is not None else "相手サーバー"
+            await interaction.followup.send(
+                f"「{origin_name}」とのコラボVCを開始しました。両方のVCの音声が相互に流れます。",
+                ephemeral=True,
+            )
+
+        @tree.command(
+            name=f"{command_prefix}_collab_leave",
+            description="接続中のコラボVCを終了します",
+        )
+        @discord.app_commands.guild_only()
+        async def kikiweb_collab_leave(interaction: discord.Interaction) -> None:
+            if not interaction.guild or not isinstance(interaction.user, discord.Member):
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+            if not manager.can_use_restricted_command(interaction.user):
+                await interaction.response.send_message(
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
+                    ephemeral=True,
+                )
+                return
+
+            partner_guild_id = manager.end_collab(interaction.guild.id)
+            if partner_guild_id is None:
+                await interaction.response.send_message(
+                    "このサーバーはコラボVCへ接続していません。",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_message(
+                "コラボVCを終了しました。通常のKikiWeb中継は継続します。",
+                ephemeral=True,
+            )
+
+        @tree.command(
             name=f"{command_prefix}_role",
-            description="auto・timeoutコマンドを使用できるロールを設定します",
+            description="管理用KikiWebコマンドを使用できるロールを設定します",
         )
         @discord.app_commands.guild_only()
         @discord.app_commands.default_permissions(manage_guild=True)
-        @discord.app_commands.describe(role="auto・timeoutコマンドを許可するロール")
+        @discord.app_commands.describe(role="管理用KikiWebコマンドを許可するロール")
         async def kikiweb_role(
             interaction: discord.Interaction,
             role: discord.Role,
@@ -1869,7 +2207,7 @@ def install_kikiweb_commands(
                 )
                 return
             await interaction.response.send_message(
-                f"サーバーオーナーと「{role.name}」ロールに /kikiweb_auto と /kikiweb_timeout を許可しました。",
+                f"サーバーオーナーと「{role.name}」ロールに、自動参加・タイムアウト・コラボVC操作を許可しました。",
                 ephemeral=True,
             )
     else:

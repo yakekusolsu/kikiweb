@@ -1808,7 +1808,7 @@ onBeforeUnmount(() => {
       <ol class="guide-steps">
         <li>
           <strong>使用ロールを設定</strong>
-          <span>初期状態ではサーバーオーナーだけが設定できます。オーナーが <code>/kikiweb_role role:&lt;ロール&gt;</code> を実行すると、そのロールにも自動参加とチャットタイムアウトの操作を許可できます。</span>
+          <span>初期状態ではサーバーオーナーだけが設定できます。オーナーが <code>/kikiweb_role role:&lt;ロール&gt;</code> を実行すると、そのロールにも自動参加、チャットタイムアウト、コラボVCの操作を許可できます。</span>
         </li>
         <li>
           <strong>自動参加を有効化</strong>
@@ -1824,7 +1824,23 @@ onBeforeUnmount(() => {
         </li>
       </ol>
 
-      <h2>4. サイトで音声を聞く</h2>
+      <h2>4. 二つのサーバーでコラボVCを使う</h2>
+      <ol class="guide-steps">
+        <li>
+          <strong>招待コードを作成</strong>
+          <span>一つ目のサーバーで使用するVCへ入り、<code>/kikiweb_collab_create</code>を実行します。表示された6桁コードは10分間有効です。</span>
+        </li>
+        <li>
+          <strong>相手のVCを接続</strong>
+          <span>二つ目のサーバーでも使用するVCへ入り、<code>/kikiweb_collab_join code:&lt;6桁コード&gt;</code>を実行します。両方のVCの音声が相互に流れます。</span>
+        </li>
+        <li>
+          <strong>コラボを終了</strong>
+          <span>どちらかのサーバーで<code>/kikiweb_collab_leave</code>を実行します。通常のKikiWeb中継はそのまま継続します。</span>
+        </li>
+      </ol>
+
+      <h2>5. サイトで音声を聞く</h2>
       <ol class="guide-steps">
         <li>
           <strong>サーバーを選択</strong>
@@ -1840,7 +1856,7 @@ onBeforeUnmount(() => {
         </li>
       </ol>
 
-      <h2>5. Discordログインでチャットを使う</h2>
+      <h2>6. Discordログインでチャットを使う</h2>
       <ol class="guide-steps">
         <li>
           <strong>Discordでログイン</strong>
@@ -1860,7 +1876,7 @@ onBeforeUnmount(() => {
         </li>
       </ol>
 
-      <h2>6. 中継・自動参加を終了</h2>
+      <h2>7. 中継・自動参加を終了</h2>
       <ol class="guide-steps">
         <li>
           <strong>自動参加を解除</strong>

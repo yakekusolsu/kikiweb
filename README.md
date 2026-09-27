@@ -68,8 +68,8 @@ async def setup_hook():
 `/kikiweb_auto enabled:false`で自動参加を解除できます。
 `/kikiweb_timeout login_user:<ログインユーザー> duration:<時間>`で、選択したユーザーのサイトチャットを
 そのサーバーだけ停止できます。時間は1分・5分・30分・1時間・1日・3日から選択します。
-初期状態ではサーバーオーナーだけが`/kikiweb_auto`と`/kikiweb_timeout`を使用できます。オーナーが
-`/kikiweb_role role:<ロール>`を実行すると、指定ロールにも両コマンドを許可できます。
+初期状態ではサーバーオーナーだけが自動参加・タイムアウト・コラボVC操作を使用できます。オーナーが
+`/kikiweb_role role:<ロール>`を実行すると、指定ロールにも各管理コマンドを許可できます。
 VCで発話するBotの音声も受信するため、Shovelなどの読み上げBotによる機械音声も通常のVC音声として中継されます。
 RelayのWebSocketが長時間接続中に切断された場合は自動再接続します。送受信タスクが予期せず終了した場合も
 Bot側の監視処理が再起動します。また、接続は5時間30分ごとに予防的に張り直すため、通常はVCへ入り直す必要はありません。
@@ -115,8 +115,21 @@ Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を 
 KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 ```
 
-追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout`、`/kikiweb_role` が同期されます。サーバー管理権限を持つ
+追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout`、`/kikiweb_role` とコラボVC用コマンドが同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
+
+### コラボVC
+
+KikiWeb Botを導入した二つのDiscordサーバー間で、VCの音声を双方向に接続できます。両サーバーの
+サーバーオーナー、または`/kikiweb_role`で許可されたロールが、それぞれ自分のサーバー側を操作します。
+
+1. 招待元で使用するVCへ入り、`/kikiweb_collab_create`を実行します。BotがVCへ接続し、10分間有効な6桁コードを表示します。
+2. 相手側も使用するVCへ入り、`/kikiweb_collab_join code:<6桁コード>`を実行します。
+3. 接続後は両VCの通常音声、読み上げBot、サウンドボード、KikiWebからの送話が相互に流れます。
+4. どちらかで`/kikiweb_collab_leave`を実行すると、コラボだけを終了します。通常のKikiWeb中継は継続します。
+
+一つのサーバーが同時に接続できる相手は一つです。BotをVCから退出させる`/kikiweb_leave`を実行した場合も、
+そのサーバーのコラボ接続は終了します。
 
 ### サウンドボード
 
