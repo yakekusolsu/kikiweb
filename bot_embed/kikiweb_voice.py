@@ -505,12 +505,67 @@ class KikiWebVoiceRelay:
         async with self.voice_connect_lock:
             await self._connect_unlocked(channel)
 
+    async def _cancel_listen_watchdog(self) -> None:
+        task = self.listen_watchdog_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self.listen_watchdog_task = None
+
+    async def _discard_guild_voice_client(self, guild: discord.Guild) -> None:
+        voice_client = guild.voice_client
+        if voice_client is None:
+            return
+        try:
+            await asyncio.wait_for(voice_client.disconnect(force=True), timeout=5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.warning(
+                "KikiWeb force-cleaned a stale Discord voice client for guild %s.",
+                guild.id,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                voice_client.cleanup()
+
+    async def _connect_voice_client(
+        self,
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> KikiWebVoiceRecvClient:
+        last_error: Optional[BaseException] = None
+        for attempt in range(2):
+            try:
+                voice_client = await channel.connect(
+                    cls=KikiWebVoiceRecvClient,
+                    timeout=30,
+                    reconnect=True,
+                    self_deaf=False,
+                    self_mute=False,
+                )
+                return voice_client
+            except asyncio.TimeoutError as error:
+                last_error = error
+                await self._discard_guild_voice_client(channel.guild)
+                if attempt == 0:
+                    LOGGER.warning(
+                        "KikiWeb voice handshake timed out for guild %s; retrying once.",
+                        channel.guild.id,
+                    )
+                    await asyncio.sleep(1)
+
+        raise RuntimeError(
+            "DiscordのVC接続がタイムアウトしました。Botの接続権限を確認して、もう一度実行してください。"
+        ) from last_error
+
     async def _connect_unlocked(
         self,
         channel: discord.VoiceChannel | discord.StageChannel,
     ) -> None:
         self.loop = asyncio.get_running_loop()
         self.closed.clear()
+        await self._cancel_listen_watchdog()
         metadata_changed = self.server_id != channel.guild.id or self.channel_id != channel.id
         self.server_id = channel.guild.id
         self.server_name = channel.guild.name
@@ -533,7 +588,8 @@ class KikiWebVoiceRelay:
             not isinstance(voice_client, KikiWebVoiceRecvClient)
             or not voice_client.is_connected()
         ):
-            await voice_client.disconnect(force=True)
+            self.voice_client = None
+            await self._discard_guild_voice_client(channel.guild)
             await asyncio.sleep(0.25)
             voice_client = None
 
@@ -541,7 +597,7 @@ class KikiWebVoiceRelay:
             if getattr(voice_client.channel, "id", None) != channel.id:
                 await voice_client.move_to(channel)
         else:
-            voice_client = await channel.connect(cls=KikiWebVoiceRecvClient, self_deaf=False, self_mute=False)
+            voice_client = await self._connect_voice_client(channel)
 
         for _ in range(20):
             if voice_client.is_connected():
@@ -549,18 +605,15 @@ class KikiWebVoiceRelay:
             await asyncio.sleep(0.1)
 
         if not voice_client.is_connected():
-            await voice_client.disconnect(force=True)
+            await self._discard_guild_voice_client(channel.guild)
             await asyncio.sleep(0.25)
-            voice_client = await channel.connect(
-                cls=KikiWebVoiceRecvClient,
-                self_deaf=False,
-                self_mute=False,
-            )
+            voice_client = await self._connect_voice_client(channel)
 
         if not voice_client.is_connected():
             raise RuntimeError("KikiWeb could not establish the Discord voice connection.")
 
         self.voice_client = voice_client
+        self.last_voice_packet_at = time.monotonic()
         await self._start_listening()
         if not self.listen_watchdog_task or self.listen_watchdog_task.done():
             self.listen_watchdog_task = asyncio.create_task(
@@ -1551,6 +1604,7 @@ class KikiWebRelayManager:
         self.auto_join_lock = asyncio.Lock()
         self.collab_invites: dict[str, KikiWebCollabInvite] = {}
         self.collab_partners: dict[int, int] = {}
+        self.collab_muted_users: dict[int, set[int]] = {}
 
     def _load_auto_join_channels(self) -> dict[int, int]:
         try:
@@ -1711,6 +1765,8 @@ class KikiWebRelayManager:
         target_relay = await self.connect(channel)
         self.collab_partners[invite.guild_id] = channel.guild.id
         self.collab_partners[channel.guild.id] = invite.guild_id
+        self.collab_muted_users[invite.guild_id] = set()
+        self.collab_muted_users[channel.guild.id] = set()
         origin_relay.set_collab_partner(channel.guild.id)
         target_relay.set_collab_partner(invite.guild_id)
         self.collab_invites.pop(normalized_code, None)
@@ -1721,6 +1777,8 @@ class KikiWebRelayManager:
         if partner_guild_id is None:
             return None
         self.collab_partners.pop(partner_guild_id, None)
+        self.collab_muted_users.pop(guild_id, None)
+        self.collab_muted_users.pop(partner_guild_id, None)
         relay = self.relays.get(guild_id)
         partner_relay = self.relays.get(partner_guild_id)
         if relay is not None:
@@ -1729,9 +1787,21 @@ class KikiWebRelayManager:
             partner_relay.set_collab_partner(None)
         return partner_guild_id
 
+    def set_collab_user_muted(self, guild_id: int, user_id: int, muted: bool) -> None:
+        if guild_id not in self.collab_partners:
+            raise RuntimeError("このサーバーはコラボVCへ接続していません。")
+        muted_users = self.collab_muted_users.setdefault(guild_id, set())
+        if muted:
+            muted_users.add(user_id)
+        else:
+            muted_users.discard(user_id)
+
     def forward_collab_pcm(self, guild_id: int, source_id: int, pcm: bytes) -> None:
         partner_guild_id = self.collab_partners.get(guild_id)
-        if partner_guild_id is None:
+        if (
+            partner_guild_id is None
+            or source_id in self.collab_muted_users.get(guild_id, set())
+        ):
             return
         partner_relay = self.relays.get(partner_guild_id)
         if partner_relay is not None:
@@ -1788,7 +1858,15 @@ class KikiWebRelayManager:
                 collab_forwarder=self.forward_collab_pcm,
             )
             self.relays[channel.guild.id] = relay
-        await relay.connect(channel)
+        try:
+            await relay.connect(channel)
+        except Exception:
+            self.end_collab(channel.guild.id)
+            if self.relays.get(channel.guild.id) is relay:
+                self.relays.pop(channel.guild.id, None)
+            with contextlib.suppress(Exception):
+                await relay.disconnect()
+            raise
         return relay
 
     async def disconnect(self, guild_id: int) -> None:
@@ -1801,6 +1879,7 @@ class KikiWebRelayManager:
         for guild_id in list(self.collab_partners):
             self.end_collab(guild_id)
         self.collab_invites.clear()
+        self.collab_muted_users.clear()
         relays = list(self.relays.values())
         self.relays.clear()
         await asyncio.gather(*(relay.disconnect() for relay in relays), return_exceptions=True)
@@ -1866,7 +1945,15 @@ def install_kikiweb_commands(
                 return
 
             await interaction.response.defer(thinking=True)
-            await manager.connect(voice.channel)
+            try:
+                await manager.connect(voice.channel)
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not join the voice channel")
+                await interaction.followup.send(
+                    f"KikiWebのVC接続に失敗しました: {error}",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send("KikiWeb への音声中継を開始しました。")
 
         @tree.command(name=f"{command_prefix}_leave", description="KikiWebのVC音声中継を停止します")
@@ -2133,6 +2220,61 @@ def install_kikiweb_commands(
             origin_name = origin_guild.name if origin_guild is not None else "相手サーバー"
             await interaction.followup.send(
                 f"「{origin_name}」とのコラボVCを開始しました。両方のVCの音声が相互に流れます。",
+                ephemeral=True,
+            )
+
+        @tree.command(
+            name=f"{command_prefix}_collab_mute",
+            description="コラボVCでメンバーの音声中継を個別に切り替えます",
+        )
+        @discord.app_commands.guild_only()
+        @discord.app_commands.describe(
+            user="音声中継を切り替えるメンバー",
+            muted="trueで相手サーバーへの送信を停止、falseで再開します",
+        )
+        async def kikiweb_collab_mute(
+            interaction: discord.Interaction,
+            user: discord.Member,
+            muted: bool,
+        ) -> None:
+            if not interaction.guild or not isinstance(interaction.user, discord.Member):
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            can_manage_others = manager.can_use_restricted_command(interaction.user)
+            if user.id != interaction.user.id and not can_manage_others:
+                await interaction.response.send_message(
+                    "自分以外を切り替えられるのは、サーバーオーナーまたは /kikiweb_role で許可されたロールだけです。",
+                    ephemeral=True,
+                )
+                return
+
+            relay = manager.relays.get(interaction.guild.id)
+            relay_channel = getattr(getattr(relay, "voice_client", None), "channel", None)
+            user_channel = getattr(getattr(user, "voice", None), "channel", None)
+            if (
+                relay_channel is None
+                or user_channel is None
+                or relay_channel.id != user_channel.id
+            ):
+                await interaction.response.send_message(
+                    "KikiWeb Botと同じVCにいるメンバーを選択してください。",
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                manager.set_collab_user_muted(interaction.guild.id, user.id, muted)
+            except RuntimeError as error:
+                await interaction.response.send_message(str(error), ephemeral=True)
+                return
+
+            state = "停止" if muted else "再開"
+            await interaction.response.send_message(
+                f"{user.display_name} の相手サーバーへの音声中継を{state}しました。",
                 ephemeral=True,
             )
 

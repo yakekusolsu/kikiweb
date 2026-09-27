@@ -1835,6 +1835,10 @@ onBeforeUnmount(() => {
           <span>二つ目のサーバーでも使用するVCへ入り、<code>/kikiweb_collab_join code:&lt;6桁コード&gt;</code>を実行します。両方のVCの音声が相互に流れます。</span>
         </li>
         <li>
+          <strong>メンバーを個別ミュート</strong>
+          <span><code>/kikiweb_collab_mute user:&lt;メンバー&gt; muted:true</code>で、その人の音声だけ相手サーバーへの送信を停止できます。<code>false</code>で再開します。本人は自分を操作でき、他人の操作には許可ロールが必要です。</span>
+        </li>
+        <li>
           <strong>コラボを終了</strong>
           <span>どちらかのサーバーで<code>/kikiweb_collab_leave</code>を実行します。通常のKikiWeb中継はそのまま継続します。</span>
         </li>
