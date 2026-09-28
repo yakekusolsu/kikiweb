@@ -70,6 +70,7 @@ MAX_CHAT_TTS_LENGTH = 500
 MAX_CHAT_TTS_DURATION_SECONDS = 180
 CHAT_TTS_OMISSION_TEXT = "以下略"
 COLLAB_INVITE_TTL_SECONDS = 10 * 60
+POPULAR_AUTO_JOIN_CHANNEL_ID = -1
 CHAT_TIMEOUT_DURATIONS = {
     60: "1分",
     5 * 60: "5分",
@@ -1625,7 +1626,9 @@ class KikiWebRelayManager:
                 channel_id = int(raw_channel_id)
             except (TypeError, ValueError):
                 continue
-            if guild_id > 0 and channel_id > 0:
+            if guild_id > 0 and (
+                channel_id > 0 or channel_id == POPULAR_AUTO_JOIN_CHANNEL_ID
+            ):
                 channels[guild_id] = channel_id
         return channels
 
@@ -1643,11 +1646,102 @@ class KikiWebRelayManager:
         self.auto_join_channels[channel.guild.id] = channel.id
         self._save_auto_join_channels()
 
+    def enable_popular_auto_join(self, guild_id: int) -> None:
+        self.auto_join_channels[guild_id] = POPULAR_AUTO_JOIN_CHANNEL_ID
+        self._save_auto_join_channels()
+
+    def disable_popular_auto_join(self, guild_id: int) -> bool:
+        if self.auto_join_channels.get(guild_id) != POPULAR_AUTO_JOIN_CHANNEL_ID:
+            return False
+        self.auto_join_channels.pop(guild_id, None)
+        self._save_auto_join_channels()
+        return True
+
     def disable_auto_join(self, guild_id: int) -> bool:
         removed = self.auto_join_channels.pop(guild_id, None) is not None
         if removed:
             self._save_auto_join_channels()
         return removed
+
+    @staticmethod
+    def _human_voice_member_count(
+        channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> int:
+        return sum(1 for member in channel.members if not member.bot)
+
+    def most_populated_voice_channel(
+        self,
+        guild: discord.Guild,
+    ) -> Optional[discord.VoiceChannel | discord.StageChannel]:
+        current_channel = getattr(guild.voice_client, "channel", None)
+        bot_member = guild.me
+        channels: list[discord.VoiceChannel | discord.StageChannel] = [
+            *guild.voice_channels,
+            *guild.stage_channels,
+        ]
+        available_channels = []
+        for channel in channels:
+            if channel == guild.afk_channel:
+                continue
+            if bot_member is not None:
+                permissions = channel.permissions_for(bot_member)
+                if not permissions.view_channel or not permissions.connect:
+                    continue
+            user_limit = getattr(channel, "user_limit", 0)
+            if (
+                user_limit > 0
+                and len(channel.members) >= user_limit
+                and channel != current_channel
+            ):
+                continue
+            available_channels.append(channel)
+
+        if not available_channels:
+            return None
+        highest_count = max(
+            self._human_voice_member_count(channel) for channel in available_channels
+        )
+        if highest_count <= 0:
+            return None
+        if (
+            current_channel in available_channels
+            and self._human_voice_member_count(current_channel) == highest_count
+        ):
+            return current_channel
+        return next(
+            channel
+            for channel in available_channels
+            if self._human_voice_member_count(channel) == highest_count
+        )
+
+    async def rebalance_popular_auto_join(self, guild: discord.Guild) -> None:
+        if self.auto_join_channels.get(guild.id) != POPULAR_AUTO_JOIN_CHANNEL_ID:
+            return
+        async with self.auto_join_lock:
+            target_channel = self.most_populated_voice_channel(guild)
+            if target_channel is None:
+                return
+            relay = self.relays.get(guild.id)
+            voice_client = relay.voice_client if relay is not None else None
+            if (
+                voice_client is not None
+                and voice_client.is_connected()
+                and getattr(voice_client.channel, "id", None) == target_channel.id
+            ):
+                return
+            try:
+                await self.connect(target_channel)
+                LOGGER.info(
+                    "KikiWeb moved to the most populated voice channel: guild=%s, channel=%s",
+                    guild.id,
+                    target_channel.id,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "KikiWeb could not move to the most populated voice channel: guild=%s, channel=%s",
+                    guild.id,
+                    target_channel.id,
+                )
 
     def _load_command_role_ids(self) -> dict[int, int]:
         try:
@@ -1827,7 +1921,19 @@ class KikiWebRelayManager:
             for guild_id, channel_id in list(self.auto_join_channels.items()):
                 if allowed_guild_ids and guild_id not in allowed_guild_ids:
                     continue
-                channel = bot.get_channel(channel_id)
+                if channel_id == POPULAR_AUTO_JOIN_CHANNEL_ID:
+                    guild = bot.get_guild(guild_id)
+                    if guild is None:
+                        LOGGER.warning(
+                            "KikiWeb popular auto-join guild is unavailable: guild=%s",
+                            guild_id,
+                        )
+                        continue
+                    channel = self.most_populated_voice_channel(guild)
+                    if channel is None:
+                        continue
+                else:
+                    channel = bot.get_channel(channel_id)
                 if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                     LOGGER.warning(
                         "KikiWeb auto-join channel is unavailable: guild=%s, channel=%s",
@@ -2035,6 +2141,71 @@ def install_kikiweb_commands(
                 return
             await interaction.followup.send(
                 f"{target_channel.name} への自動参加を有効にしました。",
+                ephemeral=True,
+            )
+
+        @tree.command(
+            name=f"{command_prefix}_auto_popular",
+            description="人数が最も多いVCへの自動参加を設定します",
+        )
+        @discord.app_commands.guild_only()
+        @discord.app_commands.describe(
+            enabled="trueで有効、falseで無効にします",
+        )
+        async def kikiweb_auto_popular(
+            interaction: discord.Interaction,
+            enabled: bool,
+        ) -> None:
+            if not interaction.guild:
+                await interaction.response.send_message(
+                    "サーバー内で実行してください。",
+                    ephemeral=True,
+                )
+                return
+
+            member = interaction.user
+            if not isinstance(member, discord.Member) or not manager.can_use_restricted_command(
+                member
+            ):
+                await interaction.response.send_message(
+                    "サーバーオーナーまたは /kikiweb_role で許可されたロールだけが使用できます。",
+                    ephemeral=True,
+                )
+                return
+
+            if not enabled:
+                removed = manager.disable_popular_auto_join(interaction.guild.id)
+                message = (
+                    "人数優先の自動参加を無効にしました。現在の接続は /kikiweb_leave で終了できます。"
+                    if removed
+                    else "このサーバーでは人数優先の自動参加は設定されていません。"
+                )
+                await interaction.response.send_message(message, ephemeral=True)
+                return
+
+            target_channel = manager.most_populated_voice_channel(interaction.guild)
+            if target_channel is None:
+                manager.enable_popular_auto_join(interaction.guild.id)
+                await interaction.response.send_message(
+                    "人数優先の自動参加を有効にしました。参加者がVCへ入るまで待機します。",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await manager.connect(target_channel)
+                manager.enable_popular_auto_join(interaction.guild.id)
+            except Exception as error:
+                LOGGER.exception("KikiWeb could not enable popular auto-join")
+                await interaction.followup.send(
+                    f"人数優先の自動参加を設定できませんでした: {error}",
+                    ephemeral=True,
+                )
+                return
+            human_count = manager._human_voice_member_count(target_channel)
+            await interaction.followup.send(
+                f"人数優先の自動参加を有効にし、{target_channel.name}（{human_count}人）へ接続しました。",
                 ephemeral=True,
             )
 
@@ -2422,21 +2593,31 @@ def install_kikiweb_commands(
     @bot.listen("on_voice_state_update")
     async def kikiweb_auto_rejoin(member, before, after):
         bot_user = getattr(bot, "user", None)
-        if (
-            bot_user is None
-            or member.id != bot_user.id
-            or before.channel is None
-            or after.channel is not None
-        ):
-            return
-
+        bot_disconnected = (
+            bot_user is not None
+            and member.id == bot_user.id
+            and before.channel is not None
+            and after.channel is None
+        )
         guild_id = member.guild.id
-        await asyncio.sleep(2)
-        voice_client = member.guild.voice_client
-        if voice_client is not None and voice_client.is_connected():
-            return
-        await manager.disconnect(guild_id)
-        if guild_id in manager.auto_join_channels:
-            await manager.connect_auto_channels(bot)
+        if bot_disconnected:
+            await asyncio.sleep(2)
+            voice_client = member.guild.voice_client
+            if voice_client is None or not voice_client.is_connected():
+                await manager.disconnect(guild_id)
+                if guild_id in manager.auto_join_channels:
+                    await manager.connect_auto_channels(
+                        bot,
+                        allowed_guild_ids={guild_id},
+                    )
+
+        if (
+            bot_user is not None
+            and member.id != bot_user.id
+            and before.channel != after.channel
+            and manager.auto_join_channels.get(guild_id) == POPULAR_AUTO_JOIN_CHANNEL_ID
+        ):
+            await asyncio.sleep(1)
+            await manager.rebalance_popular_auto_join(member.guild)
 
     return manager

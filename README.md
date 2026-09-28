@@ -66,6 +66,8 @@ async def setup_hook():
 `/kikiweb_join` で実行者が入っている VC に Bot が入り、KikiWeb relay へ音声を送ります。`/kikiweb_leave` で停止します。
 `/kikiweb_auto enabled:true channel:<VC>`で指定VCへの自動参加を保存し、Bot起動時や切断後にも再接続します。
 `/kikiweb_auto enabled:false`で自動参加を解除できます。
+`/kikiweb_auto_popular enabled:true`で、Botを除く参加者が最も多いVCへ自動参加し、人数の変化に合わせて
+接続先を移動します。`enabled:false`で解除できます。固定VC設定とは排他的で、後から有効にした方が保存されます。
 `/kikiweb_timeout login_user:<ログインユーザー> duration:<時間>`で、選択したユーザーのサイトチャットを
 そのサーバーだけ停止できます。時間は1分・5分・30分・1時間・1日・3日から選択します。
 初期状態ではサーバーオーナーだけが自動参加・タイムアウト・コラボVC操作を使用できます。オーナーが
@@ -115,7 +117,7 @@ Guild ID ごとに音声を分離し、接続中のサーバー名と VC 名を 
 KIKIWEB_GUILD_IDS=1209781281165152277,追加サーバーのGuild ID
 ```
 
-追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_timeout`、`/kikiweb_role` とコラボVC用コマンドが同期されます。サーバー管理権限を持つ
+追加サーバーでは `/kikiweb_join`、`/kikiweb_leave`、`/kikiweb_auto`、`/kikiweb_auto_popular`、`/kikiweb_timeout`、`/kikiweb_role` とコラボVC用コマンドが同期されます。サーバー管理権限を持つ
 メンバーが VC に参加して `/kikiweb_join` を実行すると、Web のサーバーメニューに表示されます。
 
 ### コラボVC

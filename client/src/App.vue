@@ -1822,6 +1822,10 @@ onBeforeUnmount(() => {
           <strong>対象VCを変更</strong>
           <span>別のVCを指定して同じコマンドを再実行すると、そのサーバーの自動参加先を変更できます。</span>
         </li>
+        <li>
+          <strong>人数が多いVCへ自動移動</strong>
+          <span><code>/kikiweb_auto_popular enabled:true</code>を実行すると、Botを除く参加者が最も多いVCへ自動参加し、人数の変化に合わせて移動します。<code>false</code>で解除できます。固定VC設定とは同時に使用できません。</span>
+        </li>
       </ol>
 
       <h2>4. 二つのサーバーでコラボVCを使う</h2>
